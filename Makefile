@@ -24,6 +24,9 @@ HOONC_TIMESTAMP = .hoonc_built
 # Find all Hoon source files
 HOON_SOURCES = $(shell find $(HOON_DIR) -name '*.hoon' 2>/dev/null)
 
+# Find hoonc source files (Make-compatible pattern)
+HOONC_SOURCES = crates/hoonc/src/lib.rs crates/hoonc/src/main.rs crates/hoonc/Cargo.toml
+
 # Hoon targets
 HOON_TARGETS = $(ASSETS_DIR)/dumb.jam $(ASSETS_DIR)/wal.jam $(ASSETS_DIR)/miner.jam
 
@@ -85,7 +88,7 @@ build-rust-fast: ## Fast Rust build (dev mode, parallel)
 
 ## Hoon compiler management
 
-$(HOONC_TIMESTAMP): crates/hoonc/src/**/*.rs crates/hoonc/Cargo.toml
+$(HOONC_TIMESTAMP): $(HOONC_SOURCES)
 	@echo "Building hoonc compiler..."
 	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo build $(CARGO_FLAGS) --bin hoonc
 	@touch $(HOONC_TIMESTAMP)
