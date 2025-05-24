@@ -58,7 +58,7 @@ check_hoonc_needs_rebuild() {
 
 # Smart hoonc build
 build_hoonc() {
-    local target_dir="target/${BUILD_MODE}"
+    local target_dir="target/$(if [[ "$BUILD_MODE" == "release" ]]; then echo "release"; else echo "debug"; fi)"
     local hoonc_bin="${target_dir}/hoonc"
 
     if [[ "$FORCE_REBUILD" == "true" ]] || check_hoonc_needs_rebuild; then
@@ -114,7 +114,7 @@ build_hoon_asset() {
     local asset_name="$1"
     local source_file="$2"
     local asset_file="assets/${asset_name}.jam"
-    local target_dir="target/${BUILD_MODE}"
+    local target_dir="target/$(if [[ "$BUILD_MODE" == "release" ]]; then echo "release"; else echo "debug"; fi)"
     local hoonc_bin="${target_dir}/hoonc"
 
     mkdir -p assets
