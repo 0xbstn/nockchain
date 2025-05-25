@@ -192,9 +192,9 @@ pub fn create_mining_driver(
                 return Ok(());
             }
 
-            // 🚀 SOLUTION: Use TRUE PARALLEL mining with batch effect processing
+            // 🚀 SOLUTION: Use TRUE PARALLEL mining with multiple receivers
             // This solves the architectural bottleneck in handle.next_effect()
-            start_true_parallel_mining(handle).await
+            start_multiple_receiver_mining(handle).await
         })
     })
 }
@@ -767,9 +767,152 @@ async fn aggressive_mining_worker(
     }
 }
 
-/// 🚀 SOLUTION: True parallel mining with batch effect processing
+/// 🚀 SOLUTION: Multiple receiver mining - each worker has its own effect receiver
+/// This completely bypasses the single-receiver bottleneck
+async fn start_multiple_receiver_mining(handle: NockAppHandle) -> Result<(), NockAppError> {
+    info!("🚀 Starting MULTIPLE RECEIVER mining for TRUE PARALLELISM!");
+    info!("🔧 ARCHITECTURAL FIX: Each worker gets its own broadcast receiver");
+    info!("💡 SOLUTION: Bypassing handle.next_effect() bottleneck completely");
+
+    // Get system capabilities
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    let pool = get_kernel_pool().await.map_err(|_| NockAppError::OtherError)?;
+    let max_workers = num_cpus; // One worker per CPU core
+
+    info!("📊 MULTIPLE RECEIVER mining config: {} workers on {}-core system",
+          max_workers, num_cpus);
+    info!("🎯 EXPECTED: Each worker will receive mining effects independently");
+    info!("⚡ TARGET: ~75% CPU utilization across all cores");
+
+    // Create a channel for mining results
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<MiningResult>();
+
+    // Create multiple broadcast receivers - one for each worker
+    let mut worker_handles = Vec::new();
+    
+    for worker_id in 0..max_workers {
+        // Each worker gets its own receiver from the broadcast channel
+        let effect_receiver = handle.effect_sender.subscribe();
+        let pool_clone = pool.clone();
+        let result_tx_clone = result_tx.clone();
+        
+        let worker_handle = tokio::spawn(async move {
+            info!("🔧 Worker #{} starting with dedicated receiver", worker_id);
+            let mut work_counter = 0u64;
+            let mut receiver = effect_receiver;
+            
+            loop {
+                match receiver.recv().await {
+                    Ok(effect) => {
+                        // Check if this is a mining effect
+                        if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                            if effect_cell.head().eq_bytes("mine") {
+                                work_counter += 1;
+                                info!("🔧 Worker #{} received mining effect #{}", worker_id, work_counter);
+                                
+                                let candidate_slab = {
+                                    let mut slab = NounSlab::new();
+                                    slab.copy_into(effect_cell.tail());
+                                    slab
+                                };
+                                
+                                // Process the mining work
+                                let start_time = std::time::Instant::now();
+                                MINING_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                                
+                                let effects = mining_attempt_worker(candidate_slab, pool_clone.clone()).await;
+                                
+                                let duration = start_time.elapsed();
+                                let result = MiningResult {
+                                    work_id: work_counter,
+                                    effects,
+                                    duration,
+                                };
+                                
+                                if let Err(_) = result_tx_clone.send(result) {
+                                    error!("🔧 Worker #{} failed to send result", worker_id);
+                                    break;
+                                }
+                                
+                                // Log statistics periodically
+                                if MINING_ATTEMPTS.load(Ordering::Relaxed) % 100 == 0 {
+                                    let attempts = MINING_ATTEMPTS.load(Ordering::Relaxed);
+                                    let successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
+                                    info!("⚡ Worker #{} - Total attempts: {}, successes: {}",
+                                          worker_id, attempts, successes);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("🔧 Worker #{} receiver error: {:?}", worker_id, e);
+                        break;
+                    }
+                }
+            }
+            
+            warn!("🔧 Worker #{} shutting down", worker_id);
+        });
+        
+        worker_handles.push(worker_handle);
+    }
+
+    info!("✅ Spawned {} workers with dedicated receivers", max_workers);
+
+    // Main loop to handle results
+    loop {
+        tokio::select! {
+            // Handle mining results
+            result = result_rx.recv() => {
+                if let Some(result) = result {
+                    if let Some(effects) = result.effects {
+                        debug!("✅ Mining work completed in {:?}", result.duration);
+
+                        // Process successful mining results
+                        for effect in effects.to_vec() {
+                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                                drop(effect);
+                                continue;
+                            };
+                            if effect_cell.head().eq_bytes("command") {
+                                if let Err(e) = handle.poke(MiningWire::Mined.to_wire(), effect).await {
+                                    error!("Could not poke nockchain with mined PoW: {}", e);
+                                } else {
+                                    SUCCESSFUL_MINES.fetch_add(1, Ordering::Relaxed);
+                                    info!("🎉 MINE SUCCESS! Total successful mines: {}",
+                                          SUCCESSFUL_MINES.load(Ordering::Relaxed));
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("❌ Mining work found no solution in {:?}", result.duration);
+                    }
+                }
+            }
+            
+            // Monitor worker health
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                let attempts = MINING_ATTEMPTS.load(Ordering::Relaxed);
+                let successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
+                let stats = pool.stats();
+                info!("📊 Mining stats - Attempts: {}, Successes: {}, Active kernels: {}/{}",
+                      attempts, successes, stats.current_pool_size, stats.total_created);
+                
+                // Check if workers are still alive
+                let alive_workers = worker_handles.iter().filter(|h| !h.is_finished()).count();
+                if alive_workers < max_workers {
+                    warn!("⚠️  Only {}/{} workers still alive", alive_workers, max_workers);
+                }
+            }
+        }
+    }
+}
+
+/// 🚀 ORIGINAL: True parallel mining with batch effect processing
 /// This solves the architectural bottleneck in handle.next_effect()
-async fn start_true_parallel_mining(handle: NockAppHandle) -> Result<(), NockAppError> {
+async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppError> {
     info!("🚀 Starting TRUE PARALLEL mining with BATCH EFFECT PROCESSING!");
     info!("🔧 ARCHITECTURAL FIX: Solving handle.next_effect() bottleneck");
     info!("📋 DIAGNOSIS: Previous issue was sequential effect consumption");
