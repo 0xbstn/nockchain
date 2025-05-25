@@ -11,7 +11,6 @@ use tracing::{info, warn, debug, instrument};
 use tokio::sync::Semaphore;
 
 /// A reusable mining kernel with its associated temporary directory
-#[derive(Debug)]
 pub struct PooledKernel {
     pub kernel: Kernel,
     pub temp_dir: TempDir,

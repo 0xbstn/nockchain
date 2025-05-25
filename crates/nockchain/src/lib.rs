@@ -9,9 +9,9 @@ use clap::{arg, command, ArgAction, Parser};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Multiaddr;
 use libp2p::{allow_block_list, connection_limits, memory_connection_limits, PeerId};
-use nockapp::driver::Operation;
 use nockapp::kernel::boot;
 use nockapp::wire::Wire;
+use nockapp::NockApp;
 use nockapp::{one_punch_driver, NockApp, NounExt};
 use nockchain_bitcoin_sync::{bitcoin_watcher_driver, BitcoinRPCConnection, GenesisNodeType};
 use nockchain_libp2p_io::p2p::{

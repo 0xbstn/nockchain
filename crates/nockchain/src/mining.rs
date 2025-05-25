@@ -14,7 +14,7 @@ use nockvm_macros::tas;
 use tempfile::tempdir;
 use tracing::{instrument, warn, info, debug, error};
 
-use crate::kernel_pool::{KernelPool, KernelPoolConfig, PooledKernel};
+use crate::kernel_pool::{KernelPool, KernelPoolConfig};
 
 // Global kernel pool instance
 static KERNEL_POOL: tokio::sync::OnceCell<Arc<KernelPool>> = tokio::sync::OnceCell::const_new();
