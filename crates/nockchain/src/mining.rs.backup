@@ -198,9 +198,9 @@ pub fn create_mining_driver(
     })
 }
 
-/// Start parallel mining using all available kernels with BATCH PROCESSING
+/// Start parallel mining using all available kernels
 async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppError> {
-    info!("🚀 Starting PARALLEL mining with BATCH PROCESSING for full CPU utilization!");
+    info!("🚀 Starting PARALLEL mining with all available cores!");
 
     // Get system capabilities
     let num_cpus = std::thread::available_parallelism()
@@ -209,7 +209,7 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
     let pool = get_kernel_pool().await.map_err(|_| NockAppError::OtherError)?;
     let max_concurrent = ((num_cpus * 3) / 4).max(8); // Same as kernel pool max
 
-    info!("📊 BATCH mining config: {} concurrent workers on {}-core system",
+    info!("📊 Parallel mining config: {} concurrent workers on {}-core system",
           max_concurrent, num_cpus);
 
     // Create channels for work distribution
@@ -232,93 +232,46 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
         });
     }
 
-    info!("✅ Spawned {} parallel mining workers with BATCH processing", max_concurrent);
+    info!("✅ Spawned {} parallel mining workers", max_concurrent);
 
     let mut work_counter = 0u64;
 
     loop {
         tokio::select! {
-            // 🚀 BATCH PROCESSING: Handle multiple mining effects at once
+            // Handle incoming mining candidates
             effect_res = handle.next_effect() => {
-                let Ok(first_effect) = effect_res else {
+                let Ok(effect) = effect_res else {
                     warn!("Error receiving effect in mining driver: {effect_res:?}");
                     continue;
                 };
+                let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                    drop(effect);
+                    continue;
+                };
 
-                // Collect all mine effects in a batch
-                let mut mine_effects = Vec::new();
+                if effect_cell.head().eq_bytes("mine") {
+                    let candidate_slab = {
+                        let mut slab = NounSlab::new();
+                        slab.copy_into(effect_cell.tail());
+                        slab
+                    };
 
-                // Process the first effect
-                if let Ok(effect_cell) = (unsafe { first_effect.root().as_cell() }) {
-                    if effect_cell.head().eq_bytes("mine") {
-                        mine_effects.push(first_effect);
-                    }
-                }
+                    work_counter += 1;
+                    let work = MiningWork {
+                        candidate: candidate_slab,
+                        work_id: work_counter,
+                    };
 
-                // 🔥 CRITICAL: Collect ALL pending mine effects (non-blocking)
-                // This eliminates the sequential bottleneck!
-                while mine_effects.len() < max_concurrent {
-                    // Try to get more effects without blocking
-                    let additional_effect = tokio::time::timeout(
-                        Duration::from_millis(1), // Very short timeout
-                        handle.next_effect()
-                    ).await;
-
-                    match additional_effect {
-                        Ok(Ok(effect)) => {
-                            if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
-                                if effect_cell.head().eq_bytes("mine") {
-                                    mine_effects.push(effect);
-                                } else {
-                                    // Non-mine effect, process normally
-                                    drop(effect);
-                                    break;
-                                }
-                            }
-                        }
-                        _ => break, // No more effects available or timeout
-                    }
-                }
-
-                // 🚀 Process ALL collected mine effects in PARALLEL
-                let batch_size = mine_effects.len();
-                if batch_size > 0 {
-                    info!("⚡ Processing BATCH of {} mine effects simultaneously!", batch_size);
-
-                    for effect in mine_effects {
-                        let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
-                            continue;
-                        };
-
-                        let candidate_slab = {
-                            let mut slab = NounSlab::new();
-                            slab.copy_into(effect_cell.tail());
-                            slab
-                        };
-
-                        work_counter += 1;
-                        let work = MiningWork {
-                            candidate: candidate_slab,
-                            work_id: work_counter,
-                        };
-
-                        // Distribute work to all available workers SIMULTANEOUSLY
-                        if let Err(_) = work_tx.send(work) {
-                            error!("Failed to send work to mining workers");
-                        } else {
-                            debug!("🔄 Dispatched mining work #{} (batch {}) to parallel workers",
-                                   work_counter, batch_size);
-                        }
-                    }
-
-                    // Log batch processing statistics
-                    if batch_size > 1 {
-                        info!("🎯 BATCH ADVANTAGE: {} parallel mining attempts vs 1 sequential", batch_size);
+                    // Distribute work to all available workers
+                    if let Err(_) = work_tx.send(work) {
+                        error!("Failed to send work to mining workers");
+                    } else {
+                        debug!("🔄 Dispatched mining work #{} to parallel workers", work_counter);
                     }
                 }
             }
 
-            // Handle mining results (unchanged)
+            // Handle mining results
             result = result_rx.recv() => {
                 if let Some(result) = result {
                     if let Some(effects) = result.effects {
