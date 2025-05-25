@@ -2,7 +2,6 @@ use nockvm::interpreter::Context;
 use nockvm::jets::util::slot;
 use nockvm::jets::Result;
 use nockvm::noun::{Atom, IndirectAtom, Noun, D, T};
-use rayon::prelude::*;
 
 use crate::form::math::bpoly::*;
 use crate::form::poly::*;

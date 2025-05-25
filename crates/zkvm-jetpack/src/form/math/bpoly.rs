@@ -533,7 +533,7 @@ pub fn bpadd_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
     }
 }
 
-/// Parallel Number Theoretic Transform
+/// Parallel Number Theoretic Transform (Conservative approach)
 pub fn bp_ntt_parallel(bp: &[Belt], root: &Belt) -> Vec<Belt> {
     let n = bp.len() as u32;
 
@@ -548,59 +548,33 @@ pub fn bp_ntt_parallel(bp: &[Belt], root: &Belt) -> Vec<Belt> {
     let mut x: Vec<Belt> = vec![Belt(0); n as usize];
     x.copy_from_slice(bp);
 
-    // Parallel bit-reversal for large arrays
-    if n > 1024 {
-        let indices: Vec<(usize, usize)> = (0..n)
-            .filter_map(|k| {
-                let rk = bitreverse(k, log_2_of_n);
-                if k < rk { Some((k as usize, rk as usize)) } else { None }
-            })
-            .collect();
-
-        // Sequential swaps (can't parallelize swaps easily)
-        for (k, rk) in indices {
-            x.swap(k, rk);
-        }
-    } else {
-        for k in 0..n {
-            let rk = bitreverse(k, log_2_of_n);
-            if k < rk {
-                x.swap(rk as usize, k as usize);
-            }
+    // Bit-reversal (sequential - safe)
+    for k in 0..n {
+        let rk = bitreverse(k, log_2_of_n);
+        if k < rk {
+            x.swap(rk as usize, k as usize);
         }
     }
 
-    // Main NTT computation
+    // Main NTT computation - keep sequential for correctness
+    // The data dependencies make parallelization complex here
     let mut m = 1;
     for _ in 0..log_2_of_n {
         let w_m: Belt = bpow(root.0, (n / (2 * m)) as u64).into();
 
-        if n >= 1024 && m >= 64 {
-            // Parallel computation for large transforms
-            (0..n).into_par_iter().step_by((2 * m) as usize).for_each(|k| {
-                let mut w = Belt(1);
-                for j in 0..m {
-                    let u: Belt = x[(k + j) as usize];
-                    let v: Belt = x[(k + j + m) as usize] * w;
-                    x[(k + j) as usize] = u + v;
-                    x[(k + j + m) as usize] = u - v;
-                    w = w * w_m;
-                }
-            });
-        } else {
-            // Sequential for smaller stages
-            let mut k = 0;
-            while k < n {
-                let mut w = Belt(1);
-                for j in 0..m {
-                    let u: Belt = x[(k + j) as usize];
-                    let v: Belt = x[(k + j + m) as usize] * w;
-                    x[(k + j) as usize] = u + v;
-                    x[(k + j + m) as usize] = u - v;
-                    w = w * w_m;
-                }
-                k += 2 * m;
+        let mut k = 0;
+        while k < n {
+            let mut w = Belt(1);
+
+            for j in 0..m {
+                let u: Belt = x[(k + j) as usize];
+                let v: Belt = x[(k + j + m) as usize] * w;
+                x[(k + j) as usize] = u + v;
+                x[(k + j + m) as usize] = u - v;
+                w = w * w_m;
             }
+
+            k += 2 * m;
         }
 
         m *= 2;
