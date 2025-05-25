@@ -237,11 +237,13 @@ async fn start_optimized_parallel_mining(mut handle: NockAppHandle) -> Result<()
     info!("✅ Spawned {} OPTIMIZED mining workers", max_concurrent);
 
     let mut work_counter = 0u64;
+    let mut last_candidate = None::<NounSlab>;
+    let mut continuous_work_counter = 0u64;
 
-    // Main loop - just collect effects and distribute work
+    // Main loop - generate continuous work to keep all threads busy
     loop {
         tokio::select! {
-            // Get mining effects one by one (we'll batch them ourselves)
+            // Try to get new mining effects but don't block
             effect_res = handle.next_effect() => {
                 let Ok(effect) = effect_res else {
                     warn!("Error receiving effect in optimized mining driver: {effect_res:?}");
@@ -258,22 +260,21 @@ async fn start_optimized_parallel_mining(mut handle: NockAppHandle) -> Result<()
                         };
 
                         work_counter += 1;
+                        last_candidate = Some(candidate_slab.clone());
 
-                        // 🔥 KEY OPTIMIZATION: Generate multiple work items from one effect
-                        // This simulates having multiple candidates to process
-                        let variations = max_concurrent; // Generate work for ALL threads
+                        // 🔥 AGGRESSIVE: Generate LOTS of work items to saturate all CPUs
+                        // For a fast CPU like 7950X, we need MANY work items
+                        let work_batch_size = max_concurrent * 4; // 4x oversubscription
                         
-                        for variation in 0..variations {
-                            let varied_candidate = if variation == 0 {
-                                candidate_slab.clone()
-                            } else {
-                                // Create a variation of the candidate
-                                create_candidate_variation(&candidate_slab, variation as u64)
-                            };
+                        info!("🚀 Generating {} work items for {} workers (4x oversubscription)", 
+                              work_batch_size, max_concurrent);
+                        
+                        for variation in 0..work_batch_size {
+                            let varied_candidate = create_candidate_variation(&candidate_slab, variation as u64);
 
                             let work = MiningWork {
                                 candidate: varied_candidate,
-                                work_id: work_counter * 1000 + variation as u64,
+                                work_id: work_counter * 10000 + variation as u64,
                             };
 
                             if let Err(_) = work_tx.send(work) {
@@ -281,8 +282,38 @@ async fn start_optimized_parallel_mining(mut handle: NockAppHandle) -> Result<()
                             }
                         }
 
-                        info!("🔄 Generated {} work items from candidate #{}", variations, work_counter);
-                        info!("⚡ All {} CPU cores should now be active", max_concurrent);
+                        info!("🔄 Generated {} work items from candidate #{}", work_batch_size, work_counter);
+                        info!("⚡ All {} CPU cores should be saturated with work", max_concurrent);
+                    }
+                }
+            }
+            
+            // 🔥 CONTINUOUS WORK GENERATION: Don't wait for effects!
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                // If we have a previous candidate, keep generating work from it
+                if let Some(ref base_candidate) = last_candidate {
+                    continuous_work_counter += 1;
+                    
+                    // Generate more work to keep CPUs busy
+                    let extra_work = max_concurrent * 2; // 2x work items
+                    
+                    debug!("⚡ Generating {} extra work items to prevent idle CPUs", extra_work);
+                    
+                    for i in 0..extra_work {
+                        let varied_candidate = create_candidate_variation(
+                            base_candidate, 
+                            continuous_work_counter * 1000 + i as u64
+                        );
+
+                        let work = MiningWork {
+                            candidate: varied_candidate,
+                            work_id: continuous_work_counter * 100000 + i as u64,
+                        };
+
+                        if let Err(_) = work_tx.send(work) {
+                            // Channel full, workers are busy - good!
+                            break;
+                        }
                     }
                 }
             }
