@@ -61,8 +61,10 @@ show-config: ## Show current build configuration
 	@echo "  TARGET_DIR: $(TARGET_DIR)"
 
 .PHONY: build
-build: $(HOON_TARGETS) build-rust ## Build everything (fast incremental)
+build: ensure-scripts ## Build everything (fast incremental)
 	$(call show_env_vars)
+	@echo "Using optimized build system..."
+	@$(SCRIPTS_DIR)/fast-build.sh
 	@echo "Build complete!"
 
 .PHONY: fast-build
