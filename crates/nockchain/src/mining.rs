@@ -80,18 +80,31 @@ impl FromStr for MiningKeyConfig {
 /// Initialize the global kernel pool
 #[instrument]
 async fn init_kernel_pool() -> Result<Arc<KernelPool>, Box<dyn std::error::Error + Send + Sync>> {
+    // Detect system capabilities
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+
+    // Scale kernel pool based on available CPUs
+    // Use 50-75% of available threads for mining kernels
+    let min_kernels = (num_cpus / 2).max(4);  // At least 4, but scale with CPUs
+    let max_kernels = ((num_cpus * 3) / 4).max(8);  // Up to 75% of threads
+
     let config = KernelPoolConfig {
-        min_size: 4,     // Start with 4 kernels
-        max_size: 8,     // Scale up to 8 kernels maximum
+        min_size: min_kernels,     // Dynamic based on CPU count
+        max_size: max_kernels,     // Scale up to 75% of available threads
         max_kernel_age: std::time::Duration::from_secs(600), // 10 minutes
         max_kernel_usage: 50,  // Replace after 50 uses
         checkout_timeout: std::time::Duration::from_secs(30),
         ..Default::default()
     };
 
-    info!("Initializing mining kernel pool with config: {:?}", config);
+    info!("🚀 Initializing mining kernel pool for {}-thread system", num_cpus);
+    info!("📊 Kernel pool config: min={}, max={} (using {}% of CPU threads)",
+          min_kernels, max_kernels, (max_kernels * 100) / num_cpus);
+
     let pool = KernelPool::new(config).await?;
-    info!("Mining kernel pool initialized successfully");
+    info!("✅ Mining kernel pool initialized successfully");
     Ok(Arc::new(pool))
 }
 
@@ -263,11 +276,18 @@ pub async fn mining_attempt_optimized(candidate: NounSlab, handle: NockAppHandle
     let total_time = start_time.elapsed();
     debug!("Total mining attempt completed in {:?}", total_time);
 
-    // Log pool statistics periodically
+    // Log pool statistics periodically with CPU usage info
     if rand::random::<f64>() < 0.1 {  // 10% chance to log stats
         let stats = pool.stats();
-        info!("Pool stats - Checkouts: {}, Pool size: {}, Avg checkout time: {:.2}ms",
-              stats.total_checkouts, stats.current_pool_size, stats.average_checkout_time_ms);
+        let cpu_usage_percent = (stats.current_pool_size * 100) /
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+
+        info!("⚡ Pool stats - Active kernels: {}/{} ({}% CPU), Checkouts: {}, Avg checkout: {:.2}ms",
+              stats.current_pool_size,
+              std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8),
+              cpu_usage_percent,
+              stats.total_checkouts,
+              stats.average_checkout_time_ms);
     }
 }
 

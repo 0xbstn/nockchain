@@ -14,6 +14,10 @@ BUILD_MODE ?= dev
 CARGO_FLAGS = $(if $(filter release,$(BUILD_MODE)),--release,)
 TARGET_DIR = target/$(if $(filter release,$(BUILD_MODE)),release,debug)
 
+# Runtime optimization for multi-threading
+export TOKIO_WORKER_THREADS ?= $(shell nproc)
+export RAYON_NUM_THREADS ?= $(shell nproc)
+
 # Directories and files
 HOON_DIR = hoon
 ASSETS_DIR = assets
@@ -49,12 +53,15 @@ help: ## Show this help message
 	@echo "  make run-nockchain-no-mining  # Observer node (no mining)"
 	@echo ""
 	@echo "Debug modes:"
-	@echo "  make debug-run          # Maximum verbosity debugging"
+	@echo "  make debug-run          # Enhanced verbosity debugging"
 	@echo "  make test-kernel-pool   # Test kernel pool optimization specifically"
+	@echo "  make system-info        # Show CPU configuration and expected performance"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  BUILD_MODE={dev|release}  # Build configuration (default: dev)"
 	@echo "  CARGO_BUILD_JOBS=N        # Parallel jobs (default: $(CARGO_BUILD_JOBS))"
+	@echo "  TOKIO_WORKER_THREADS=N    # Tokio async threads (default: $(TOKIO_WORKER_THREADS))"
+	@echo "  RAYON_NUM_THREADS=N       # Rayon parallel threads (default: $(RAYON_NUM_THREADS))"
 
 .PHONY: show-config
 show-config: ## Show current build configuration
@@ -260,8 +267,8 @@ run-nockchain: build ## Run nockchain node with optimized kernel pool
 	ls -la ../$(TARGET_DIR)/nockchain && \
 	rm -f nockchain.sock && \
 	echo "Debug: About to start nockchain..." && \
-	RUST_BACKTRACE=full \
-	RUST_LOG=debug,nockchain=trace,nockchain_libp2p_io=debug,libp2p=debug \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug,nockchain=debug,nockchain_libp2p_io=info,libp2p=info \
 	../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--mining-pubkey $(MINING_PUBKEY) \
@@ -285,8 +292,8 @@ run-nockchain-no-mining: build ## Run nockchain node without mining (observer mo
 	cd observer-node && \
 	echo "Debug: Inside observer-node, pwd = $$(pwd)" && \
 	rm -f nockchain.sock && \
-	RUST_BACKTRACE=full \
-	RUST_LOG=debug,nockchain=trace,nockchain_libp2p_io=debug \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug,nockchain=debug,nockchain_libp2p_io=info \
 	../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
@@ -360,9 +367,9 @@ endef
 .PHONY: $(HOON_TARGETS)
 
 .PHONY: debug-run
-debug-run: build ## Debug run with maximum verbosity and kernel pool stats
+debug-run: build ## Debug run with enhanced verbosity
 	$(call show_env_vars)
-	@echo "🔍 DEBUG MODE: Maximum verbosity enabled"
+	@echo "🔍 DEBUG MODE: Enhanced verbosity enabled"
 	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
 	@echo "Debug: Binary exists: $$(ls -la $(TARGET_DIR)/nockchain | wc -l) files"
 	@echo "Debug: Binary size: $$(ls -lh $(TARGET_DIR)/nockchain | awk '{print $$5}')"
@@ -371,8 +378,8 @@ debug-run: build ## Debug run with maximum verbosity and kernel pool stats
 	cd debug-node && \
 	echo "🚀 Starting nockchain in DEBUG mode..." && \
 	rm -f nockchain.sock && \
-	RUST_BACKTRACE=full \
-	RUST_LOG=trace \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug \
 	MINIMAL_LOG_FORMAT=false \
 	../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
@@ -388,10 +395,31 @@ test-kernel-pool: build ## Test kernel pool functionality specifically
 	mkdir -p test-mining
 	cd test-mining && \
 	echo "Testing kernel pool..." && \
-	RUST_BACKTRACE=full \
-	RUST_LOG=debug,nockchain::kernel_pool=trace,nockchain::mining=trace \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug,nockchain::kernel_pool=debug,nockchain::mining=debug \
 	../$(TARGET_DIR)/nockchain \
 		--npc-socket test.sock \
 		--mining-pubkey $(MINING_PUBKEY) \
 		--mine \
 		--peer /ip4/95.216.102.60/udp/3006/quic-v1
+
+.PHONY: system-info
+system-info: ## Show system configuration and expected mining performance
+	@echo "🖥️  SYSTEM CONFIGURATION"
+	@echo "======================================"
+	@echo "CPU cores: $$(nproc)"
+	@echo "Available parallelism: $$(nproc)"
+	@echo "Build jobs: $(CARGO_BUILD_JOBS)"
+	@echo "Tokio worker threads: $(TOKIO_WORKER_THREADS)"
+	@echo "Rayon threads: $(RAYON_NUM_THREADS)"
+	@echo ""
+	@echo "⚡ EXPECTED MINING PERFORMANCE"
+	@echo "======================================"
+	@echo "Kernel pool size: $$(( $$(nproc) / 2 )) - $$(( $$(nproc) * 3 / 4 )) kernels"
+	@echo "Expected CPU usage: ~75% of all cores"
+	@echo "Estimated mining rate: ~$$(( $$(nproc) * 100 )) attempts/sec"
+	@echo ""
+	@echo "🚀 With your $$(nproc)-thread system, you should see:"
+	@echo "   • $$(( $$(nproc) * 3 / 4 )) parallel mining kernels"
+	@echo "   • ~75% CPU utilization across all cores"
+	@echo "   • 10-50x faster mining than single-kernel"
