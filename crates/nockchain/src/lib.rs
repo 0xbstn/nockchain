@@ -12,7 +12,6 @@ use libp2p::{allow_block_list, connection_limits, memory_connection_limits, Peer
 use nockapp::kernel::boot;
 use nockapp::wire::Wire;
 use nockapp::NockApp;
-use nockapp::{one_punch_driver, NockApp, NounExt};
 use nockchain_bitcoin_sync::{bitcoin_watcher_driver, BitcoinRPCConnection, GenesisNodeType};
 use nockchain_libp2p_io::p2p::{
     MAX_ESTABLISHED_CONNECTIONS, MAX_ESTABLISHED_CONNECTIONS_PER_PEER,

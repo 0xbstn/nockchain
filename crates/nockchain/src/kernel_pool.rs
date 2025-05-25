@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use kernels::miner::KERNEL;
 use nockapp::kernel::checkpoint::JamPaths;
 use nockapp::kernel::form::Kernel;
-use nockapp::noun::slab::NounSlab;
 use tempfile::{TempDir, tempdir};
 use tracing::{info, warn, debug, instrument};
 use tokio::sync::Semaphore;
