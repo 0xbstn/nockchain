@@ -56,27 +56,21 @@ check_hoonc_needs_rebuild() {
     return 1  # No rebuild needed
 }
 
-# Smart hoonc build
+# Smart hoonc build (install globally like Makefile)
 build_hoonc() {
-    local target_dir="target/$(if [[ "$BUILD_MODE" == "release" ]]; then echo "release"; else echo "debug"; fi)"
-    local hoonc_bin="${target_dir}/hoonc"
-
     if [[ "$FORCE_REBUILD" == "true" ]] || check_hoonc_needs_rebuild; then
-        log_info "Building hoonc compiler..."
-        local cargo_flags=""
-        if [[ "$BUILD_MODE" == "release" ]]; then
-            cargo_flags="--release"
-        fi
+        log_info "Building and installing hoonc compiler..."
 
-        CARGO_BUILD_JOBS="$JOBS" cargo build $cargo_flags --bin hoonc
+        CARGO_BUILD_JOBS="$JOBS" cargo install --locked --force --path crates/hoonc --bin hoonc
         touch .hoonc_built
-        log_success "hoonc built successfully"
+        log_success "hoonc installed successfully"
     else
         log_info "hoonc is up to date, skipping build"
     fi
 
-    if [[ ! -f "$hoonc_bin" ]]; then
-        log_error "hoonc binary not found at $hoonc_bin"
+    # Verify hoonc is available globally
+    if ! command -v hoonc >/dev/null 2>&1; then
+        log_error "hoonc not found in PATH after installation"
         exit 1
     fi
 }
@@ -109,24 +103,28 @@ asset_needs_rebuild() {
     return 1
 }
 
-# Build a single Hoon asset
+# Build a single Hoon asset (using global hoonc like Makefile)
 build_hoon_asset() {
     local asset_name="$1"
     local source_file="$2"
     local asset_file="assets/${asset_name}.jam"
-    local target_dir="target/$(if [[ "$BUILD_MODE" == "release" ]]; then echo "release"; else echo "debug"; fi)"
-    local hoonc_bin="${target_dir}/hoonc"
 
     mkdir -p assets
 
     if [[ "$FORCE_REBUILD" == "true" ]] || asset_needs_rebuild "$asset_file" "$source_file"; then
         log_info "Building $asset_name.jam..."
 
-        # Run hoonc in a clean environment
+        # Use same command as Makefile: RUST_LOG=trace hoonc
         if [[ "$VERBOSE" == "true" ]]; then
-            RUST_LOG=trace "$hoonc_bin" "$source_file" hoon
+            RUST_LOG=trace hoonc "$source_file" hoon
         else
-            "$hoonc_bin" "$source_file" hoon >/dev/null 2>&1
+            RUST_LOG=trace hoonc "$source_file" hoon >/dev/null 2>&1
+        fi
+
+        # Check if out.jam was created
+        if [[ ! -f "out.jam" ]]; then
+            log_error "Failed to generate out.jam for $asset_name"
+            return 1
         fi
 
         mv out.jam "$asset_file"
@@ -136,7 +134,7 @@ build_hoon_asset() {
     fi
 }
 
-# Build all Hoon assets in parallel
+# Build all Hoon assets (SEQUENTIALLY to avoid out.jam conflicts)
 build_hoon_assets() {
     log_info "Building Hoon assets..."
 
@@ -145,25 +143,21 @@ build_hoon_assets() {
         echo '%trivial' > hoon/trivial.hoon
     fi
 
-    # Build assets in parallel using background jobs
-    declare -a pids=()
+    # Build assets sequentially to avoid out.jam conflicts
+    build_hoon_asset "dumb" "hoon/apps/dumbnet/outer.hoon" || {
+        log_error "Failed to build dumb.jam"
+        exit 1
+    }
 
-    build_hoon_asset "dumb" "hoon/apps/dumbnet/outer.hoon" &
-    pids+=($!)
+    build_hoon_asset "wal" "hoon/apps/wallet/wallet.hoon" || {
+        log_error "Failed to build wal.jam"
+        exit 1
+    }
 
-    build_hoon_asset "wal" "hoon/apps/wallet/wallet.hoon" &
-    pids+=($!)
-
-    build_hoon_asset "miner" "hoon/apps/dumbnet/miner.hoon" &
-    pids+=($!)
-
-    # Wait for all background jobs
-    for pid in "${pids[@]}"; do
-        if ! wait "$pid"; then
-            log_error "Failed to build Hoon asset (PID: $pid)"
-            exit 1
-        fi
-    done
+    build_hoon_asset "miner" "hoon/apps/dumbnet/miner.hoon" || {
+        log_error "Failed to build miner.jam"
+        exit 1
+    }
 
     log_success "All Hoon assets built successfully"
 }
@@ -198,23 +192,11 @@ main() {
     # Build components in optimal order
     build_hoonc
 
-    # Build Hoon assets and Rust in parallel
-    build_hoon_assets &
-    hoon_pid=$!
+    # Build Hoon assets first (sequential, no conflicts)
+    build_hoon_assets
 
-    build_rust &
-    rust_pid=$!
-
-    # Wait for both to complete
-    if ! wait $hoon_pid; then
-        log_error "Hoon build failed"
-        exit 1
-    fi
-
-    if ! wait $rust_pid; then
-        log_error "Rust build failed"
-        exit 1
-    fi
+    # Then build Rust (can be parallel with nothing)
+    build_rust
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
