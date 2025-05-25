@@ -35,6 +35,7 @@ pub const NOCK_STACK_1KB: usize = 1 << 7;
 
 // nock stack size
 pub const NOCK_STACK_SIZE: usize = (NOCK_STACK_1KB << 10 << 10) * 8; // 8GB
+pub const NOCK_STACK_SIZE_MINING: usize = (NOCK_STACK_1KB << 10 << 10) * 2; // 2GB for mining - optimized
 
 // HUGE nock stack size
 pub const NOCK_STACK_SIZE_HUGE: usize = (NOCK_STACK_1KB << 10 << 10) * 128; // 32GB

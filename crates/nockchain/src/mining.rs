@@ -491,8 +491,9 @@ pub async fn mining_attempt(candidate: NounSlab, handle: NockAppHandle) -> () {
     let snapshot_path_buf = snapshot_dir.path().to_path_buf();
     let jam_paths = JamPaths::new(snapshot_dir.path());
     // Spawns a new std::thread for this mining attempt
+    // MEMORY OPTIMIZATION: Use mining-optimized kernel (2GB instead of 8GB or 32GB)
     let kernel =
-        Kernel::load_with_hot_state_huge(snapshot_path_buf, jam_paths, KERNEL, &hot_state, false)
+        Kernel::load_with_hot_state_mining(snapshot_path_buf, jam_paths, KERNEL, &hot_state, false)
             .await
             .expect("Could not load mining kernel");
     let effects_slab = kernel

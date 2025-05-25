@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn};
 use crate::kernel::checkpoint::{Checkpoint, ExportedState, JamPaths, JammedCheckpoint};
 use crate::nockapp::wire::{wire_to_noun, WireRepr};
 use crate::noun::slam;
-use crate::utils::{create_context, current_da, NOCK_STACK_SIZE, NOCK_STACK_SIZE_HUGE};
+use crate::utils::{create_context, current_da, NOCK_STACK_SIZE, NOCK_STACK_SIZE_HUGE, NOCK_STACK_SIZE_MINING};
 use crate::{AtomExt, CrownError, NounExt, Result, ToBytesExt};
 use bincode::config::Configuration;
 
@@ -609,6 +609,29 @@ impl Kernel {
         let pma_dir_arc = Arc::new(pma_dir);
         let serf = SerfThread::new(
             NOCK_STACK_SIZE_HUGE, jam_paths_arc, kernel_vec, hot_state_vec, trace,
+        )
+        .await?;
+        Ok(Self {
+            serf,
+            pma_dir: pma_dir_arc,
+        })
+    }
+
+    /// Loads a kernel with optimized memory usage for mining operations.
+    /// Uses only 2GB instead of 8GB or 32GB, since mining doesn't need huge stack.
+    pub async fn load_with_hot_state_mining(
+        pma_dir: PathBuf,
+        jam_paths: JamPaths,
+        kernel: &[u8],
+        hot_state: &[HotEntry],
+        trace: bool,
+    ) -> Result<Self> {
+        let jam_paths_arc = Arc::new(jam_paths);
+        let kernel_vec = Vec::from(kernel);
+        let hot_state_vec = Vec::from(hot_state);
+        let pma_dir_arc = Arc::new(pma_dir);
+        let serf = SerfThread::new(
+            NOCK_STACK_SIZE_MINING, jam_paths_arc, kernel_vec, hot_state_vec, trace,
         )
         .await?;
         Ok(Self {

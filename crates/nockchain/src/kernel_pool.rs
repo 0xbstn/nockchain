@@ -30,7 +30,9 @@ impl PooledKernel {
         let snapshot_path_buf = temp_dir.path().to_path_buf();
         let jam_paths = JamPaths::new(temp_dir.path());
 
-        let kernel = Kernel::load_with_hot_state_huge(
+        // MEMORY OPTIMIZATION: Use mining-optimized kernel (2GB instead of 8GB or 32GB)
+        // Mining doesn't need huge stack size - this reduces memory usage by 75%
+        let kernel = Kernel::load_with_hot_state_mining(
             snapshot_path_buf,
             jam_paths,
             KERNEL,
