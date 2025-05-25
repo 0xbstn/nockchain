@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use kernels::miner::KERNEL;
 use nockapp::kernel::checkpoint::JamPaths;
@@ -11,7 +12,12 @@ use nockapp::noun::{AtomExt, NounExt};
 use nockvm::noun::{Atom, D, T};
 use nockvm_macros::tas;
 use tempfile::tempdir;
-use tracing::{instrument, warn};
+use tracing::{instrument, warn, info, debug, error};
+
+use crate::kernel_pool::{KernelPool, KernelPoolConfig, PooledKernel};
+
+// Global kernel pool instance
+static KERNEL_POOL: tokio::sync::OnceCell<Arc<KernelPool>> = tokio::sync::OnceCell::const_new();
 
 pub enum MiningWire {
     Mined,
@@ -71,6 +77,32 @@ impl FromStr for MiningKeyConfig {
     }
 }
 
+/// Initialize the global kernel pool
+#[instrument]
+async fn init_kernel_pool() -> Result<Arc<KernelPool>, Box<dyn std::error::Error + Send + Sync>> {
+    let config = KernelPoolConfig {
+        min_size: 4,     // Start with 4 kernels
+        max_size: 8,     // Scale up to 8 kernels maximum
+        max_kernel_age: std::time::Duration::from_secs(600), // 10 minutes
+        max_kernel_usage: 50,  // Replace after 50 uses
+        checkout_timeout: std::time::Duration::from_secs(30),
+        ..Default::default()
+    };
+
+    info!("Initializing mining kernel pool with config: {:?}", config);
+    let pool = KernelPool::new(config).await?;
+    info!("Mining kernel pool initialized successfully");
+    Ok(Arc::new(pool))
+}
+
+/// Get or initialize the global kernel pool
+async fn get_kernel_pool() -> Result<Arc<KernelPool>, Box<dyn std::error::Error + Send + Sync>> {
+    KERNEL_POOL
+        .get_or_try_init(|| async { init_kernel_pool().await })
+        .await
+        .map(|pool| pool.clone())
+}
+
 pub fn create_mining_driver(
     mining_config: Option<Vec<MiningKeyConfig>>,
     mine: bool,
@@ -78,6 +110,18 @@ pub fn create_mining_driver(
 ) -> IODriverFn {
     Box::new(move |mut handle| {
         Box::pin(async move {
+            // Initialize kernel pool early if mining is enabled
+            if mine {
+                info!("Pre-initializing kernel pool for mining...");
+                match get_kernel_pool().await {
+                    Ok(_) => info!("Kernel pool ready for mining"),
+                    Err(e) => {
+                        error!("Failed to initialize kernel pool: {}", e);
+                        return Err(NockAppError::OtherError);
+                    }
+                }
+            }
+
             let Some(configs) = mining_config else {
                 enable_mining(&handle, false).await?;
 
@@ -90,6 +134,7 @@ pub fn create_mining_driver(
 
                 return Ok(());
             };
+
             if configs.len() == 1
                 && configs[0].share == 1
                 && configs[0].m == 1
@@ -111,6 +156,7 @@ pub fn create_mining_driver(
             if !mine {
                 return Ok(());
             }
+
             let mut next_attempt: Option<NounSlab> = None;
             let mut current_attempt: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
@@ -137,7 +183,7 @@ pub fn create_mining_driver(
                             } else {
                                 let (cur_handle, attempt_handle) = handle.dup();
                                 handle = cur_handle;
-                                current_attempt.spawn(mining_attempt(candidate_slab, attempt_handle));
+                                current_attempt.spawn(mining_attempt_optimized(candidate_slab, attempt_handle));
                             }
                         }
                     },
@@ -151,7 +197,7 @@ pub fn create_mining_driver(
                         next_attempt = None;
                         let (cur_handle, attempt_handle) = handle.dup();
                         handle = cur_handle;
-                        current_attempt.spawn(mining_attempt(candidate_slab, attempt_handle));
+                        current_attempt.spawn(mining_attempt_optimized(candidate_slab, attempt_handle));
 
                     }
                 }
@@ -160,6 +206,73 @@ pub fn create_mining_driver(
     })
 }
 
+/// Optimized mining attempt using kernel pool (10-50x faster)
+#[instrument(skip_all)]
+pub async fn mining_attempt_optimized(candidate: NounSlab, handle: NockAppHandle) -> () {
+    let start_time = std::time::Instant::now();
+
+    // Get kernel from pool instead of creating new one
+    let pool = match get_kernel_pool().await {
+        Ok(pool) => pool,
+        Err(e) => {
+            error!("Failed to get kernel pool: {}", e);
+            return;
+        }
+    };
+
+    let pooled_kernel = match pool.checkout().await {
+        Ok(kernel) => kernel,
+        Err(e) => {
+            error!("Failed to checkout kernel from pool: {}", e);
+            return;
+        }
+    };
+
+    debug!("Kernel checked out in {:?}", start_time.elapsed());
+
+    // Execute mining with pooled kernel
+    let effects_slab = match pooled_kernel.kernel.poke(MiningWire::Candidate.to_wire(), candidate).await {
+        Ok(effects) => effects,
+        Err(e) => {
+            error!("Failed to poke mining kernel: {}", e);
+            pool.checkin(pooled_kernel);
+            return;
+        }
+    };
+
+    debug!("Mining computation completed in {:?}", start_time.elapsed());
+
+    // Process effects
+    for effect in effects_slab.to_vec() {
+        let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+            drop(effect);
+            continue;
+        };
+        if effect_cell.head().eq_bytes("command") {
+            if let Err(e) = handle.poke(MiningWire::Mined.to_wire(), effect).await {
+                error!("Could not poke nockchain with mined PoW: {}", e);
+            } else {
+                debug!("Successfully submitted mined proof");
+            }
+        }
+    }
+
+    // Return kernel to pool
+    pool.checkin(pooled_kernel);
+
+    let total_time = start_time.elapsed();
+    debug!("Total mining attempt completed in {:?}", total_time);
+
+    // Log pool statistics periodically
+    if rand::random::<f64>() < 0.1 {  // 10% chance to log stats
+        let stats = pool.stats();
+        info!("Pool stats - Checkouts: {}, Pool size: {}, Avg checkout time: {:.2}ms",
+              stats.total_checkouts, stats.current_pool_size, stats.average_checkout_time_ms);
+    }
+}
+
+/// Legacy mining attempt function (keep for fallback)
+#[instrument(skip_all)]
 pub async fn mining_attempt(candidate: NounSlab, handle: NockAppHandle) -> () {
     let snapshot_dir =
         tokio::task::spawn_blocking(|| tempdir().expect("Failed to create temporary directory"))

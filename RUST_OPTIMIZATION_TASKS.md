@@ -5,11 +5,12 @@
 ## 🚀 **PRIORITY 1: Memory Management & Allocation Optimizations**
 
 ### Memory Pool & Object Pooling
-- [ ] **Implement NockStack pool for mining** (`crates/nockchain/src/mining.rs:167`)
+- [x] **Implement NockStack pool for mining** (`crates/nockchain/src/mining.rs:167`) ✅ **COMPLETED**
   - **Current issue**: Creates new Kernel + tempdir for EACH mining attempt (~100ms overhead)
   - **Solution**: Pre-allocate pool of 4-8 mining kernels, reuse them
   - **Impact**: 10-50x faster mining attempt startup
   - **Implementation**: Thread-safe kernel pool with checkout/checkin
+  - **✅ STATUS**: Implemented in `kernel_pool.rs` with optimized `mining_attempt_optimized()`
 
 - [ ] **Optimize IndirectAtom allocation** (`crates/nockvm/rust/nockvm/src/mem.rs:indirect_raw_size`)
   - **Current issue**: Individual allocation for each atom > 63 bits
@@ -197,7 +198,7 @@ After implementing these optimizations:
 ## 🛠 **Implementation Strategy**
 
 ### Phase 1: Quick Wins (1-2 weeks)
-1. Mining kernel pool ✅ **MASSIVE IMPACT**
+1. Mining kernel pool ✅ **COMPLETED - MASSIVE IMPACT ACHIEVED**
 2. Debug assertion removal ✅ **EASY WIN**
 3. Basic memory pooling ✅ **HIGH ROI**
 

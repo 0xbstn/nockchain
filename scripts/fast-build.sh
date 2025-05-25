@@ -114,11 +114,11 @@ build_hoon_asset() {
     if [[ "$FORCE_REBUILD" == "true" ]] || asset_needs_rebuild "$asset_file" "$source_file"; then
         log_info "Building $asset_name.jam..."
 
-        # Use same command as Makefile: RUST_LOG=trace hoonc
+        # Use same command as Makefile: RUST_LOG=info hoonc (reduced from trace to eliminate warnings)
         if [[ "$VERBOSE" == "true" ]]; then
             RUST_LOG=trace hoonc "$source_file" hoon
         else
-            RUST_LOG=trace hoonc "$source_file" hoon >/dev/null 2>&1
+            RUST_LOG=info hoonc "$source_file" hoon >/dev/null 2>&1
         fi
 
         # Check if out.jam was created
