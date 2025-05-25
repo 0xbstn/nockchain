@@ -18,7 +18,6 @@ TARGET_DIR = target/$(if $(filter release,$(BUILD_MODE)),release,debug)
 HOON_DIR = hoon
 ASSETS_DIR = assets
 SCRIPTS_DIR = scripts
-HOONC_BIN = $(TARGET_DIR)/hoonc
 HOONC_TIMESTAMP = .hoonc_built
 
 # Find all Hoon source files
@@ -55,7 +54,6 @@ show-config: ## Show current build configuration
 	@echo "  CARGO_FLAGS: $(CARGO_FLAGS)"
 	@echo "  CARGO_BUILD_JOBS: $(CARGO_BUILD_JOBS)"
 	@echo "  TARGET_DIR: $(TARGET_DIR)"
-	@echo "  HOONC_BIN: $(HOONC_BIN)"
 
 .PHONY: build
 build: $(HOON_TARGETS) build-rust ## Build everything (fast incremental)
@@ -89,21 +87,19 @@ build-rust-fast: ## Fast Rust build (dev mode, parallel)
 ## Hoon compiler management
 
 $(HOONC_TIMESTAMP): $(HOONC_SOURCES)
-	@echo "Building hoonc compiler..."
-	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo build $(CARGO_FLAGS) --bin hoonc
+	@echo "Building and installing hoonc compiler..."
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo install --locked --force --path crates/hoonc --bin hoonc
 	@touch $(HOONC_TIMESTAMP)
 
-$(HOONC_BIN): $(HOONC_TIMESTAMP)
-	@test -f $(HOONC_BIN) || (echo "Error: hoonc binary not found at $(HOONC_BIN)" && exit 1)
-
 .PHONY: install-hoonc
-install-hoonc: $(HOONC_BIN) nuke-hoonc-data ## Install hoonc from this repo
+install-hoonc: nuke-hoonc-data ## Install hoonc from this repo
 	$(call show_env_vars)
 	@echo "Installing hoonc..."
 	cargo install --locked --force --path crates/hoonc --bin hoonc
+	@touch $(HOONC_TIMESTAMP)
 
 .PHONY: update-hoonc
-update-hoonc: $(HOONC_BIN) ## Ensure hoonc is built and up-to-date
+update-hoonc: $(HOONC_TIMESTAMP) ## Ensure hoonc is built and up-to-date
 	@echo "hoonc is up to date"
 
 ## Directory management
@@ -120,34 +116,34 @@ ensure-scripts:
 ## Hoon build targets
 
 .PHONY: build-hoon-all
-build-hoon-all: $(HOON_TARGETS) ## Build all Hoon assets
+build-hoon-all: nuke-assets update-hoonc ensure-dirs build-trivial $(HOON_TARGETS) ## Build all Hoon assets
 
 .PHONY: build-hoon
 build-hoon: $(HOON_TARGETS) ## Build Hoon assets (incremental)
 
 .PHONY: build-trivial
-build-trivial: ensure-dirs $(HOONC_BIN)
+build-trivial: ensure-dirs $(HOONC_TIMESTAMP)
 	@echo "Building trivial Hoon..."
 	@echo '%trivial' > $(HOON_DIR)/trivial.hoon
-	$(HOONC_BIN) --arbitrary $(HOON_DIR)/trivial.hoon
+	hoonc --arbitrary $(HOON_DIR)/trivial.hoon
 
-# Optimized asset building with proper dependencies
-$(ASSETS_DIR)/dumb.jam: $(HOONC_BIN) $(HOON_DIR)/apps/dumbnet/outer.hoon $(HOON_SOURCES) | ensure-dirs
+# Optimized asset building using globally installed hoonc (like original)
+$(ASSETS_DIR)/dumb.jam: $(HOONC_TIMESTAMP) $(HOON_DIR)/apps/dumbnet/outer.hoon $(HOON_SOURCES) | ensure-dirs
 	$(call show_env_vars)
 	@echo "Building dumb.jam..."
-	@cd $(CURDIR) && $(HOONC_BIN) $(HOON_DIR)/apps/dumbnet/outer.hoon $(HOON_DIR)
+	@cd $(CURDIR) && RUST_LOG=trace hoonc $(HOON_DIR)/apps/dumbnet/outer.hoon $(HOON_DIR)
 	@mv out.jam $@
 
-$(ASSETS_DIR)/wal.jam: $(HOONC_BIN) $(HOON_DIR)/apps/wallet/wallet.hoon $(HOON_SOURCES) | ensure-dirs
+$(ASSETS_DIR)/wal.jam: $(HOONC_TIMESTAMP) $(HOON_DIR)/apps/wallet/wallet.hoon $(HOON_SOURCES) | ensure-dirs
 	$(call show_env_vars)
 	@echo "Building wal.jam..."
-	@cd $(CURDIR) && $(HOONC_BIN) $(HOON_DIR)/apps/wallet/wallet.hoon $(HOON_DIR)
+	@cd $(CURDIR) && RUST_LOG=trace hoonc $(HOON_DIR)/apps/wallet/wallet.hoon $(HOON_DIR)
 	@mv out.jam $@
 
-$(ASSETS_DIR)/miner.jam: $(HOONC_BIN) $(HOON_DIR)/apps/dumbnet/miner.hoon $(HOON_SOURCES) | ensure-dirs
+$(ASSETS_DIR)/miner.jam: $(HOONC_TIMESTAMP) $(HOON_DIR)/apps/dumbnet/miner.hoon $(HOON_SOURCES) | ensure-dirs
 	$(call show_env_vars)
 	@echo "Building miner.jam..."
-	@cd $(CURDIR) && $(HOONC_BIN) $(HOON_DIR)/apps/dumbnet/miner.hoon $(HOON_DIR)
+	@cd $(CURDIR) && RUST_LOG=trace hoonc $(HOON_DIR)/apps/dumbnet/miner.hoon $(HOON_DIR)
 	@mv out.jam $@
 
 ## Installation targets
@@ -249,7 +245,7 @@ run-nockchain: build ## Run nockchain node
 .PHONY: status
 status: ## Show build status
 	@echo "Build status:"
-	@echo "  Hoonc built: $(if $(wildcard $(HOONC_TIMESTAMP)),✓,✗)"
+	@echo "  Hoonc installed: $(if $(wildcard $(HOONC_TIMESTAMP)),✓,✗)"
 	@echo "  Assets built:"
 	@for asset in $(HOON_TARGETS); do \
 		echo "    $$(basename $$asset): $(if $(wildcard $$asset),✓,✗)"; \
@@ -294,9 +290,9 @@ debug-deps: ## Show dependency information
 .PHONY: debug-timestamps
 debug-timestamps: ## Show file timestamps for debugging
 	@echo "File timestamps:"
-	@echo "  hoonc timestamp: $(if $(wildcard $(HOONC_TIMESTAMP)),$$(stat -c %Y $(HOONC_TIMESTAMP)),missing)"
+	@echo "  hoonc timestamp: $(if $(wildcard $(HOONC_TIMESTAMP)),$$(stat -c %Y $(HOONC_TIMESTAMP) 2>/dev/null || stat -f %m $(HOONC_TIMESTAMP)),missing)"
 	@for target in $(HOON_TARGETS); do \
-		echo "  $$(basename $$target): $(if $(wildcard $$target),$$(stat -c %Y $$target),missing)"; \
+		echo "  $$(basename $$target): $(if $(wildcard $$target),$$(stat -c %Y $$target 2>/dev/null || stat -f %m $$target),missing)"; \
 	done
 
 # Environment variable display function
