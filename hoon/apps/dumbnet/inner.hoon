@@ -905,7 +905,7 @@
       ==
       ::
       ++  do-mine
-        |=  nonce=noun-digest:tip5:zeke
+        |=  base-nonce=noun-digest:tip5:zeke
         ^-  [(list effect:dk) kernel-state:dk]
         ?.  mining.m.k
           `k
@@ -914,10 +914,33 @@
           `k
         =/  commit=block-commitment:t
           (block-commitment:page:t candidate-block.m.k)
-        =.  next-nonce.m.k  nonce
-        ~&  mining-on+nonce
+        =.  next-nonce.m.k  base-nonce
+
+        ::  🚀 PARALLEL MINING: Generate multiple nonces for full CPU utilization
+        ::  Instead of single nonce, create 24 parallel mining attempts
+        =/  parallel-count=@ud  24  :: Target: ~75% CPU utilization
+
+        ::  Generate nonce variations for parallel processing
+        =/  nonce-variations=(list noun-digest:tip5:zeke)
+          %+  turn  (gulf 0 (dec parallel-count))
+          |=  i=@ud
+          ^-  noun-digest:tip5:zeke
+          ::  Create unique nonce by combining base with iteration counter
+          (hash-noun-varlen:tip5:zeke [%parallel-nonce base-nonce i])
+
+        ::  Create mining effects for each parallel nonce
+        =/  mining-effects=(list effect:dk)
+          %+  turn  nonce-variations
+          |=  nonce-var=noun-digest:tip5:zeke
+          ^-  effect:dk
+          [%mine pow-len:zeke commit nonce-var]
+
+        ::  Log parallel mining activation
+        ~>  %slog.[0 leaf+(trip (cat 3 'parallel mining: ' (scot %ud parallel-count)))]
+        ~>  %slog.[0 leaf+(trip (cat 3 'nonces generated: ' (scot %ud (lent mining-effects))))]
+
         :_  k
-        [%mine pow-len:zeke commit nonce]~
+        mining-effects  ::  Return list of parallel mining effects
     --::  +poke
   --::  +kernel
 --
