@@ -166,6 +166,80 @@ impl NockAppHandle {
         Ok(effect_receiver.recv().await?)
     }
 
+    /// 🚀 NEW: Batch effect processing to solve multi-threading bottleneck
+    /// Consumes ALL available effects at once instead of one-by-one
+    #[instrument(skip(self))]
+    pub async fn next_effects_batch(&self, max_batch_size: usize) -> Result<Vec<NounSlab>, NockAppError> {
+        let mut effect_receiver = self.effect_receiver.lock().await;
+        let mut effects = Vec::with_capacity(max_batch_size);
+
+        // Get the first effect (blocking)
+        tracing::debug!("Waiting for first effect in batch");
+        let first_effect = effect_receiver.recv().await?;
+        effects.push(first_effect);
+
+        // Try to get additional effects without blocking (drain the queue)
+        while effects.len() < max_batch_size {
+            match effect_receiver.try_recv() {
+                Ok(effect) => {
+                    effects.push(effect);
+                    tracing::debug!("Added effect to batch, total: {}", effects.len());
+                }
+                Err(broadcast::error::TryRecvError::Empty) => {
+                    // No more effects available, break
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                    // Some effects were dropped, but continue
+                    tracing::warn!("Effect receiver lagged, some effects may have been dropped");
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    // Channel closed
+                    return Err(NockAppError::BroadcastRecvError(broadcast::error::RecvError::Closed));
+                }
+            }
+        }
+
+        tracing::info!("🚀 Collected {} effects in batch for parallel processing", effects.len());
+        Ok(effects)
+    }
+
+    /// 🚀 NEW: Non-blocking batch effect processing
+    /// Returns immediately with whatever effects are available
+    #[instrument(skip(self))]
+    pub async fn try_next_effects_batch(&self, max_batch_size: usize) -> Result<Vec<NounSlab>, NockAppError> {
+        let mut effect_receiver = self.effect_receiver.lock().await;
+        let mut effects = Vec::with_capacity(max_batch_size);
+
+        // Try to get effects without blocking
+        while effects.len() < max_batch_size {
+            match effect_receiver.try_recv() {
+                Ok(effect) => {
+                    effects.push(effect);
+                }
+                Err(broadcast::error::TryRecvError::Empty) => {
+                    // No more effects available, break
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                    // Some effects were dropped, but continue
+                    tracing::warn!("Effect receiver lagged, some effects may have been dropped");
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    // Channel closed
+                    return Err(NockAppError::BroadcastRecvError(broadcast::error::RecvError::Closed));
+                }
+            }
+        }
+
+        if !effects.is_empty() {
+            tracing::debug!("🚀 Collected {} effects in non-blocking batch", effects.len());
+        }
+        Ok(effects)
+    }
+
     #[instrument(skip(self))]
     pub fn dup(self) -> (Self, Self) {
         let io_sender = self.io_sender.clone();

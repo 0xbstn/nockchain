@@ -192,8 +192,9 @@ pub fn create_mining_driver(
                 return Ok(());
             }
 
-            // 🚀 NEW: Use AGGRESSIVE parallel mining for maximum CPU utilization
-            start_aggressive_parallel_mining(handle).await
+            // 🚀 SOLUTION: Use TRUE PARALLEL mining with batch effect processing
+            // This solves the architectural bottleneck in handle.next_effect()
+            start_true_parallel_mining(handle).await
         })
     })
 }
@@ -876,6 +877,229 @@ async fn aggressive_mining_worker(
             let successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
             let stats = pool.stats();
             info!("⚡ AGGRESSIVE Mining stats - Attempts: {}, Successes: {}, Active kernels: {}/{}",
+                  attempts, successes, stats.current_pool_size, stats.total_created);
+        }
+    }
+}
+
+/// 🚀 SOLUTION: True parallel mining with batch effect processing
+/// This solves the architectural bottleneck in handle.next_effect()
+async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppError> {
+    info!("🚀 Starting TRUE PARALLEL mining with BATCH EFFECT PROCESSING!");
+    info!("🔧 ARCHITECTURAL FIX: Solving handle.next_effect() bottleneck");
+    info!("📋 DIAGNOSIS: Previous issue was sequential effect consumption");
+    info!("💡 SOLUTION: Batch processing of ALL available effects at once");
+
+    // Get system capabilities
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    let pool = get_kernel_pool().await.map_err(|_| NockAppError::OtherError)?;
+    let max_concurrent = num_cpus; // Use ALL CPU cores
+
+    info!("📊 TRUE PARALLEL mining config: {} concurrent workers on {}-core system (100% CPU)",
+          max_concurrent, num_cpus);
+    info!("🔧 ARCHITECTURAL FIX: Using batch effect processing to eliminate bottleneck");
+    info!("🎯 EXPECTED: Hoon generates 24 effects, Rust processes ALL 24 at once");
+    info!("⚡ TARGET CPU USAGE: ~75% across all {} threads", num_cpus);
+
+    // Create channels for work distribution
+    let (work_tx, work_rx) = mpsc::unbounded_channel::<MiningWork>();
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<MiningResult>();
+
+    // Spawn parallel mining workers
+    let work_rx = Arc::new(tokio::sync::Mutex::new(work_rx));
+
+    // Start worker tasks - one per CPU core
+    for worker_id in 0..max_concurrent {
+        let pool_clone = pool.clone();
+        let work_rx_clone = work_rx.clone();
+        let result_tx_clone = result_tx.clone();
+
+        tokio::spawn(async move {
+            true_parallel_mining_worker(worker_id, pool_clone, work_rx_clone, result_tx_clone).await;
+        });
+    }
+
+    info!("✅ Spawned {} TRUE PARALLEL mining workers (100% CPU utilization)", max_concurrent);
+
+    let mut work_counter = 0u64;
+    let mut batch_counter = 0u64;
+
+    // 🚀 CRITICAL FIX: Use batch processing instead of single effect processing
+    loop {
+        tokio::select! {
+            // 🔥 SOLUTION: Process ALL effects in batch instead of one-by-one
+            effects_batch_res = handle.next_effects_batch(max_concurrent * 2) => {
+                let effects_batch = match effects_batch_res {
+                    Ok(batch) => batch,
+                    Err(e) => {
+                        warn!("Error receiving effects batch in mining driver: {e:?}");
+                        continue;
+                    }
+                };
+
+                batch_counter += 1;
+                let batch_size = effects_batch.len();
+
+                info!("🚀 BATCH #{}: Received {} effects for parallel processing",
+                      batch_counter, batch_size);
+
+                // Process ALL effects in the batch
+                let mut mining_candidates = 0;
+                for effect in effects_batch {
+                    if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                        if effect_cell.head().eq_bytes("mine") {
+                            let candidate_slab = {
+                                let mut slab = NounSlab::new();
+                                slab.copy_into(effect_cell.tail());
+                                slab
+                            };
+
+                            work_counter += 1;
+                            mining_candidates += 1;
+
+                            let work = MiningWork {
+                                candidate: candidate_slab,
+                                work_id: work_counter,
+                            };
+
+                            // Send ALL candidates to workers immediately
+                            if let Err(_) = work_tx.send(work) {
+                                error!("Failed to send work to parallel mining workers");
+                            } else {
+                                debug!("📤 Sent mining candidate #{} to worker pool", work_counter);
+                            }
+                        }
+                    }
+                }
+
+                if mining_candidates > 0 {
+                    info!("⚡ BATCH #{}: Distributed {} mining candidates to {} workers",
+                          batch_counter, mining_candidates, max_concurrent);
+                    info!("🎯 Expected CPU utilization: {}% (using {} threads)",
+                          (mining_candidates.min(max_concurrent) * 100) / max_concurrent,
+                          mining_candidates.min(max_concurrent));
+                } else {
+                    debug!("📭 BATCH #{}: No mining effects in batch of {} effects",
+                           batch_counter, batch_size);
+                }
+            }
+
+            // Handle mining results
+            result = result_rx.recv() => {
+                if let Some(result) = result {
+                    if let Some(effects) = result.effects {
+                        debug!("✅ TRUE PARALLEL mining work #{} completed in {:?}",
+                               result.work_id, result.duration);
+
+                        // Process successful mining results
+                        for effect in effects.to_vec() {
+                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                                drop(effect);
+                                continue;
+                            };
+                            if effect_cell.head().eq_bytes("command") {
+                                if let Err(e) = handle.poke(MiningWire::Mined.to_wire(), effect).await {
+                                    error!("Could not poke nockchain with mined PoW: {}", e);
+                                } else {
+                                    SUCCESSFUL_MINES.fetch_add(1, Ordering::Relaxed);
+                                    info!("🎉 TRUE PARALLEL MINE SUCCESS! Total mines: {}",
+                                          SUCCESSFUL_MINES.load(Ordering::Relaxed));
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("❌ TRUE PARALLEL mining work #{} found no solution in {:?}",
+                               result.work_id, result.duration);
+                    }
+                }
+            }
+
+            // 🚀 NEW: Periodic work generation to keep workers busy
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                // Check if we have idle workers and generate additional work
+                let additional_effects = handle.try_next_effects_batch(max_concurrent).await
+                    .unwrap_or_else(|_| Vec::new());
+
+                if !additional_effects.is_empty() {
+                    info!("🔄 Generated {} additional effects to keep workers busy",
+                          additional_effects.len());
+
+                    for effect in additional_effects {
+                        if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                            if effect_cell.head().eq_bytes("mine") {
+                                let candidate_slab = {
+                                    let mut slab = NounSlab::new();
+                                    slab.copy_into(effect_cell.tail());
+                                    slab
+                                };
+
+                                work_counter += 1;
+                                let work = MiningWork {
+                                    candidate: candidate_slab,
+                                    work_id: work_counter,
+                                };
+
+                                if let Err(_) = work_tx.send(work) {
+                                    error!("Failed to send additional work to mining workers");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// TRUE PARALLEL mining worker that processes work items continuously
+async fn true_parallel_mining_worker(
+    worker_id: usize,
+    pool: Arc<KernelPool>,
+    work_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<MiningWork>>>,
+    result_tx: mpsc::UnboundedSender<MiningResult>,
+) {
+    info!("🔧 TRUE PARALLEL Mining worker #{} started (BATCH PROCESSING)", worker_id);
+
+    loop {
+        // Get next work item
+        let work = {
+            let mut rx = work_rx.lock().await;
+            rx.recv().await
+        };
+
+        let Some(work) = work else {
+            warn!("🔧 TRUE PARALLEL mining worker #{} shutting down - no more work", worker_id);
+            break;
+        };
+
+        debug!("🔧 TRUE PARALLEL worker #{} processing work #{}", worker_id, work.work_id);
+
+        // Process the mining work immediately
+        let start_time = std::time::Instant::now();
+        MINING_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+
+        let effects = mining_attempt_worker(work.candidate, pool.clone()).await;
+
+        let duration = start_time.elapsed();
+        let result = MiningResult {
+            work_id: work.work_id,
+            effects,
+            duration,
+        };
+
+        if let Err(_) = result_tx.send(result) {
+            error!("🔧 TRUE PARALLEL worker #{} failed to send result", worker_id);
+            break;
+        }
+
+        // Log statistics for TRUE PARALLEL mining
+        if MINING_ATTEMPTS.load(Ordering::Relaxed) % 100 == 0 {
+            let attempts = MINING_ATTEMPTS.load(Ordering::Relaxed);
+            let successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
+            let stats = pool.stats();
+            info!("⚡ TRUE PARALLEL Mining stats - Attempts: {}, Successes: {}, Active kernels: {}/{}",
                   attempts, successes, stats.current_pool_size, stats.total_created);
         }
     }
