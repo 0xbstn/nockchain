@@ -109,7 +109,7 @@ pub fn batch_linear_combination_jet(context: &mut Context, subject: Noun) -> Res
         .par_iter()
         .zip(value_vec.par_iter())
         .map(|(&c, &v)| c * v)
-        .reduce(|| Belt::ZERO, |a, b| a + b);
+        .reduce(|| Belt::zero(), |a, b| a + b);
     
     Ok(Atom::new(&mut context.stack, result.into()).as_noun())
 }
@@ -132,7 +132,7 @@ pub fn batch_msm_jet(context: &mut Context, subject: Noun) -> Result {
         .par_iter()
         .zip(point_vec.par_iter())
         .map(|(&s, &p)| s * p)
-        .reduce(|| Belt::ZERO, |a, b| a + b);
+        .reduce(|| Belt::zero(), |a, b| a + b);
     
     Ok(Atom::new(&mut context.stack, result.into()).as_noun())
 }
@@ -188,7 +188,7 @@ fn parse_belt_list(list: Noun) -> Result<Vec<Belt>> {
             elem.as_atom()
                 .and_then(|a| a.as_u64())
                 .map(|u| Belt::from(u))
-                .ok_or(JetErr::Deterministic)
+                .ok_or(JetErr::Punt)
         })
         .collect()
 }
@@ -212,8 +212,8 @@ fn batch_invert(elements: &[Belt]) -> Result<Vec<Belt>> {
     }
     
     let n = elements.len();
-    let mut products = vec![Belt::ONE; n];
-    let mut results = vec![Belt::ZERO; n];
+    let mut products = vec![Belt::one(); n];
+    let mut results = vec![Belt::zero(); n];
     
     // Forward pass: compute cumulative products
     products[0] = elements[0];
@@ -237,7 +237,7 @@ fn batch_invert(elements: &[Belt]) -> Result<Vec<Belt>> {
 /// Evaluate polynomial using Horner's method
 fn evaluate_polynomial(coeffs: &[Belt], x: Belt) -> Belt {
     if coeffs.is_empty() {
-        return Belt::ZERO;
+        return Belt::zero();
     }
     
     let mut result = coeffs[coeffs.len() - 1];
@@ -277,7 +277,7 @@ pub fn batch_matrix_vector_mul_jet(context: &mut Context, subject: Noun) -> Resu
             row.iter()
                 .zip(vec_elems.iter())
                 .map(|(&a, &b)| a * b)
-                .fold(Belt::ZERO, |acc, x| acc + x)
+                .fold(Belt::zero(), |acc, x| acc + x)
         })
         .collect();
     

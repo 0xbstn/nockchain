@@ -1,7 +1,7 @@
 use nockvm::interpreter::Context;
 use nockvm::jets::util::slot;
 use nockvm::jets::{JetErr, Result};
-use nockvm::noun::{IndirectAtom, Noun, T};
+use nockvm::noun::{Atom, IndirectAtom, Noun, T};
 use rayon::prelude::*;
 
 use crate::form::math::base::*;
@@ -22,8 +22,8 @@ pub fn bpmul_fft_jet(context: &mut Context, subject: Noun) -> Result {
     };
     
     // Handle zero polynomials
-    if p_poly.is_empty() || q_poly.is_empty() {
-        return Ok(Noun::from(0u64));
+    if p_poly.is_zero() || q_poly.is_zero() {
+        return Ok(unsafe { Atom::from(0u64).as_noun() });
     }
     
     let p_len = p_poly.len();
@@ -39,8 +39,8 @@ pub fn bpmul_fft_jet(context: &mut Context, subject: Noun) -> Result {
     let fft_size = result_len.next_power_of_two();
     
     // Pad polynomials to FFT size
-    let mut p_padded = vec![Belt::ZERO; fft_size];
-    let mut q_padded = vec![Belt::ZERO; fft_size];
+    let mut p_padded = vec![Belt::zero(); fft_size];
+    let mut q_padded = vec![Belt::zero(); fft_size];
     
     p_padded[..p_len].copy_from_slice(p_poly.0);
     q_padded[..q_len].copy_from_slice(q_poly.0);
@@ -49,8 +49,8 @@ pub fn bpmul_fft_jet(context: &mut Context, subject: Noun) -> Result {
     let omega = find_root_of_unity(fft_size)?;
     
     // Perform FFT on both polynomials
-    let mut p_fft = vec![Belt::ZERO; fft_size];
-    let mut q_fft = vec![Belt::ZERO; fft_size];
+    let mut p_fft = vec![Belt::zero(); fft_size];
+    let mut q_fft = vec![Belt::zero(); fft_size];
     
     fft_for_mul(&p_padded, &mut p_fft, omega);
     fft_for_mul(&q_padded, &mut q_fft, omega);
@@ -64,7 +64,7 @@ pub fn bpmul_fft_jet(context: &mut Context, subject: Noun) -> Result {
     
     // Inverse FFT
     let omega_inv = omega.inv();
-    let mut result = vec![Belt::ZERO; fft_size];
+    let mut result = vec![Belt::zero(); fft_size];
     fft_for_mul(&product_fft, &mut result, omega_inv);
     
     // Scale by 1/n
@@ -92,8 +92,8 @@ pub fn bpmul_naive_jet(context: &mut Context, subject: Noun) -> Result {
         return jet_err();
     };
     
-    if p_poly.is_empty() || q_poly.is_empty() {
-        return Ok(Noun::from(0u64));
+    if p_poly.is_zero() || q_poly.is_zero() {
+        return Ok(unsafe { Atom::from(0u64).as_noun() });
     }
     
     let result_len = p_poly.len() + q_poly.len() - 1;
@@ -101,7 +101,7 @@ pub fn bpmul_naive_jet(context: &mut Context, subject: Noun) -> Result {
         new_handle_mut_slice(&mut context.stack, Some(result_len));
     
     // Initialize to zero
-    res_slice.fill(Belt::ZERO);
+    res_slice.fill(Belt::zero());
     
     // Naive O(n²) multiplication
     for (i, &p_coeff) in p_poly.0.iter().enumerate() {
@@ -120,7 +120,7 @@ fn find_root_of_unity(n: usize) -> Result<Belt> {
     // we need to find an nth root of unity
     
     if n > (1 << 32) {
-        return Err(JetErr::Deterministic);
+        return Err(JetErr::Punt);
     }
     
     // Generator for multiplicative group
@@ -151,7 +151,7 @@ fn fft_for_mul(input: &[Belt], output: &mut [Belt], omega: Belt) {
         let omega_step = omega.pow((n / size) as u64);
         
         for k in (0..n).step_by(size) {
-            let mut omega_power = Belt::ONE;
+            let mut omega_power = Belt::one();
             for j in 0..half_size {
                 let t = omega_power * output[k + j + half_size];
                 let u = output[k + j];
@@ -189,7 +189,7 @@ pub fn batch_bpmul_jet(context: &mut Context, subject: Noun) -> Result {
         .collect();
     
     if pair_list.is_empty() {
-        return Ok(Noun::from(0u64));
+        return Ok(unsafe { Atom::from(0u64).as_noun() });
     }
     
     // Parallel multiplication
@@ -199,7 +199,7 @@ pub fn batch_bpmul_jet(context: &mut Context, subject: Noun) -> Result {
         .collect();
     
     // Convert results back to noun list
-    let mut res_list = Noun::from(0u64);
+    let mut res_list = unsafe { Atom::from(0u64).as_noun() };
     for result in results.iter().rev() {
         let (res_atom, res_slice): (IndirectAtom, &mut [Belt]) = 
             new_handle_mut_slice(&mut context.stack, Some(result.len()));
@@ -230,7 +230,7 @@ fn multiply_polynomials(p: &[Belt], q: &[Belt]) -> Vec<Belt> {
 /// Naive multiplication for small polynomials
 fn multiply_naive(p: &[Belt], q: &[Belt]) -> Vec<Belt> {
     let result_len = p.len() + q.len() - 1;
-    let mut result = vec![Belt::ZERO; result_len];
+    let mut result = vec![Belt::zero(); result_len];
     
     for (i, &p_coeff) in p.iter().enumerate() {
         for (j, &q_coeff) in q.iter().enumerate() {
@@ -246,16 +246,16 @@ fn multiply_fft(p: &[Belt], q: &[Belt]) -> Vec<Belt> {
     let result_len = p.len() + q.len() - 1;
     let fft_size = result_len.next_power_of_two();
     
-    let mut p_padded = vec![Belt::ZERO; fft_size];
-    let mut q_padded = vec![Belt::ZERO; fft_size];
+    let mut p_padded = vec![Belt::zero(); fft_size];
+    let mut q_padded = vec![Belt::zero(); fft_size];
     
     p_padded[..p.len()].copy_from_slice(p);
     q_padded[..q.len()].copy_from_slice(q);
     
     let omega = find_root_of_unity(fft_size).unwrap_or(Belt::from(1u64));
     
-    let mut p_fft = vec![Belt::ZERO; fft_size];
-    let mut q_fft = vec![Belt::ZERO; fft_size];
+    let mut p_fft = vec![Belt::zero(); fft_size];
+    let mut q_fft = vec![Belt::zero(); fft_size];
     
     fft_for_mul(&p_padded, &mut p_fft, omega);
     fft_for_mul(&q_padded, &mut q_fft, omega);
@@ -267,11 +267,11 @@ fn multiply_fft(p: &[Belt], q: &[Belt]) -> Vec<Belt> {
         .collect();
     
     let omega_inv = omega.inv();
-    let mut result_padded = vec![Belt::ZERO; fft_size];
+    let mut result_padded = vec![Belt::zero(); fft_size];
     fft_for_mul(&product_fft, &mut result_padded, omega_inv);
     
     let n_inv = Belt::from(fft_size as u64).inv();
-    let mut result = vec![Belt::ZERO; result_len];
+    let mut result = vec![Belt::zero(); result_len];
     
     for i in 0..result_len {
         result[i] = result_padded[i] * n_inv;

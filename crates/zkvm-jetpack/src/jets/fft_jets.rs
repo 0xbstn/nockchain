@@ -102,8 +102,8 @@ fn fft_recursive(input: &[Belt], output: &mut [Belt], omega: Belt) {
     let omega_sq = omega * omega;
     
     // Split into even and odd
-    let mut even = vec![Belt::ZERO; half_n];
-    let mut odd = vec![Belt::ZERO; half_n];
+    let mut even = vec![Belt::zero(); half_n];
+    let mut odd = vec![Belt::zero(); half_n];
     
     for i in 0..half_n {
         even[i] = input[2 * i];
@@ -111,14 +111,14 @@ fn fft_recursive(input: &[Belt], output: &mut [Belt], omega: Belt) {
     }
     
     // Recursive calls
-    let mut even_out = vec![Belt::ZERO; half_n];
-    let mut odd_out = vec![Belt::ZERO; half_n];
+    let mut even_out = vec![Belt::zero(); half_n];
+    let mut odd_out = vec![Belt::zero(); half_n];
     
     fft_recursive(&even, &mut even_out, omega_sq);
     fft_recursive(&odd, &mut odd_out, omega_sq);
     
     // Combine results
-    let mut omega_power = Belt::ONE;
+    let mut omega_power = Belt::one();
     for i in 0..half_n {
         let t = omega_power * odd_out[i];
         output[i] = even_out[i] + t;
@@ -133,7 +133,7 @@ fn fft_parallel(input: &[Belt], output: &mut [Belt], omega: Belt) {
     let log_n = n.trailing_zeros() as usize;
     
     // Bit reversal using parallel iterator
-    let mut working = vec![Belt::ZERO; n];
+    let mut working = vec![Belt::zero(); n];
     working.par_iter_mut().enumerate().for_each(|(i, val)| {
         let rev_i = reverse_bits(i, log_n);
         *val = input[rev_i];
@@ -146,7 +146,7 @@ fn fft_parallel(input: &[Belt], output: &mut [Belt], omega: Belt) {
         let omega_step = omega.pow((n / size) as u64);
         
         (0..n).into_par_iter().step_by(size).for_each(|k| {
-            let mut omega_power = Belt::ONE;
+            let mut omega_power = Belt::one();
             for j in 0..half_size {
                 let t = omega_power * working[k + j + half_size];
                 let u = working[k + j];
@@ -211,7 +211,7 @@ pub fn batch_fft_jet(context: &mut Context, subject: Noun) -> Result {
         .collect();
     
     if poly_list.is_empty() {
-        return Ok(Noun::from(0u64));
+        return Ok(unsafe { Atom::from(0u64).as_noun() });
     }
     
     let n = poly_list[0].len();
@@ -220,14 +220,14 @@ pub fn batch_fft_jet(context: &mut Context, subject: Noun) -> Result {
     let results: Vec<_> = poly_list
         .par_iter()
         .map(|poly| {
-            let mut output = vec![Belt::ZERO; n];
+            let mut output = vec![Belt::zero(); n];
             fft_internal(poly.0, &mut output, omega_belt);
             output
         })
         .collect();
     
     // Convert results back to noun
-    let mut res_list = Noun::from(0u64);
+    let mut res_list = unsafe { Atom::from(0u64).as_noun() };
     for result in results.iter().rev() {
         let (res_atom, res_slice): (IndirectAtom, &mut [Belt]) = 
             new_handle_mut_slice(&mut context.stack, Some(n));
