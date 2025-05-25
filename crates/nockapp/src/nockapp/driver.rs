@@ -206,9 +206,8 @@ impl NockAppHandle {
     /// Try to get a single effect without blocking
     #[instrument(skip(self))]
     pub fn try_next_effect(&self) -> Result<Option<NounSlab>, NockAppError> {
-        // This requires a non-blocking try_recv, which broadcast::Receiver doesn't have
-        // We'll implement this using a timeout of 0
-        let effect_receiver = self.effect_receiver.try_lock()
+        // Use try_lock to get a mutable reference to the effect receiver
+        let mut effect_receiver = self.effect_receiver.try_lock()
             .map_err(|_| NockAppError::OtherError)?;
 
         match effect_receiver.try_recv() {
