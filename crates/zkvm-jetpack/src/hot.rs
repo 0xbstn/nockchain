@@ -2,11 +2,14 @@ use either::Either::*;
 use nockvm::jets::hot::{HotEntry, K_138};
 
 use crate::jets::base_jets::*;
+use crate::jets::batch_field_jets::*;
 use crate::jets::bp_jets::*;
 use crate::jets::cheetah_jets::*;
 use crate::jets::crypto_jets::*;
 use crate::jets::fext_jets::*;
+use crate::jets::fft_jets::*;
 use crate::jets::mary_jets::*;
+use crate::jets::poly_mul_jets::*;
 use crate::jets::tip5_jets::*;
 use crate::jets::verifier_jets::*;
 
@@ -19,6 +22,10 @@ pub fn produce_prover_hot_state() -> Vec<HotEntry> {
     jets.extend(KEYGEN_JETS);
     jets.extend(XTRA_JETS);
     jets.extend(EXTENSION_FIELD_JETS);
+    // 🚀 NEW: High-performance jets for STARK optimization
+    jets.extend(FFT_JETS);
+    jets.extend(POLY_MUL_JETS);
+    jets.extend(BATCH_FIELD_JETS);
 
     jets
 }
@@ -456,3 +463,191 @@ pub const CURVE_JETS: &[HotEntry] = &[(
     1,
     ch_scal_jet,
 )];
+
+// 🚀 NEW: FFT Jets for fast polynomial operations
+pub const FFT_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"fft"),
+        ],
+        1,
+        fft_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"ifft"),
+        ],
+        1,
+        ifft_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-fft"),
+        ],
+        1,
+        batch_fft_jet,
+    ),
+];
+
+// 🚀 NEW: Polynomial Multiplication Jets
+pub const POLY_MUL_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"bpmul-fft"),
+        ],
+        1,
+        bpmul_fft_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-bpmul"),
+        ],
+        1,
+        batch_bpmul_jet,
+    ),
+];
+
+// 🚀 NEW: Batch Field Operation Jets
+pub const BATCH_FIELD_JETS: &[HotEntry] = &[
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-badd"),
+        ],
+        1,
+        batch_badd_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-bmul"),
+        ],
+        1,
+        batch_bmul_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-binv"),
+        ],
+        1,
+        batch_binv_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-bpow"),
+        ],
+        1,
+        batch_bpow_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-linear-combination"),
+        ],
+        1,
+        batch_linear_combination_jet,
+    ),
+    (
+        &[
+            K_138,
+            Left(b"one"),
+            Left(b"two"),
+            Left(b"tri"),
+            Left(b"qua"),
+            Left(b"pen"),
+            Left(b"zeke"),
+            Left(b"ext-field"),
+            Left(b"misc-lib"),
+            Left(b"batch-poly-eval"),
+        ],
+        1,
+        batch_poly_eval_jet,
+    ),
+];

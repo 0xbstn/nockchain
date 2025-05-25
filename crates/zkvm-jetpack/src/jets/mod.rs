@@ -1,9 +1,12 @@
 pub mod base_jets;
+pub mod batch_field_jets;
 pub mod bp_jets;
 pub mod cheetah_jets;
 pub mod crypto_jets;
 pub mod fext_jets;
+pub mod fft_jets;
 pub mod mary_jets;
+pub mod poly_mul_jets;
 pub mod tip5_jets;
 pub mod utils;
 pub mod verifier_jets;
