@@ -244,7 +244,7 @@ run-nockchain: build ## Run nockchain node with optimized kernel pool
 	@echo "Running nockchain node with kernel pool optimization..."
 	mkdir -p miner-node
 	cd miner-node && rm -f nockchain.sock && \
-	RUST_BACKTRACE=1 $(TARGET_DIR)/nockchain \
+	RUST_BACKTRACE=1 ../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--mining-pubkey $(MINING_PUBKEY) \
 		--mine \
@@ -263,7 +263,7 @@ run-nockchain-no-mining: build ## Run nockchain node without mining (observer mo
 	@echo "Running nockchain node in observer mode..."
 	mkdir -p observer-node
 	cd observer-node && rm -f nockchain.sock && \
-	RUST_BACKTRACE=1 $(TARGET_DIR)/nockchain \
+	RUST_BACKTRACE=1 ../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
 		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
