@@ -48,6 +48,10 @@ help: ## Show this help message
 	@echo "  make run-nockchain            # Mining node with kernel pool optimization"
 	@echo "  make run-nockchain-no-mining  # Observer node (no mining)"
 	@echo ""
+	@echo "Debug modes:"
+	@echo "  make debug-run          # Maximum verbosity debugging"
+	@echo "  make test-kernel-pool   # Test kernel pool optimization specifically"
+	@echo ""
 	@echo "Environment variables:"
 	@echo "  BUILD_MODE={dev|release}  # Build configuration (default: dev)"
 	@echo "  CARGO_BUILD_JOBS=N        # Parallel jobs (default: $(CARGO_BUILD_JOBS))"
@@ -242,9 +246,23 @@ watch: ensure-scripts ## Watch for changes and rebuild
 run-nockchain: build ## Run nockchain node with optimized kernel pool
 	$(call show_env_vars)
 	@echo "Running nockchain node with kernel pool optimization..."
+	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
+	@echo "Debug: Binary path = ../$(TARGET_DIR)/nockchain"
+	@echo "Debug: Checking if binary exists..."
+	@ls -la $(TARGET_DIR)/nockchain || echo "Binary not found!"
+	@echo "Debug: Creating miner-node directory..."
 	mkdir -p miner-node
-	cd miner-node && rm -f nockchain.sock && \
-	RUST_BACKTRACE=1 ../$(TARGET_DIR)/nockchain \
+	@echo "Debug: Current working directory before cd: $$(pwd)"
+	@echo "Debug: Starting nockchain with full debugging..."
+	cd miner-node && \
+	echo "Debug: Inside miner-node, pwd = $$(pwd)" && \
+	echo "Debug: Checking binary path from here..." && \
+	ls -la ../$(TARGET_DIR)/nockchain && \
+	rm -f nockchain.sock && \
+	echo "Debug: About to start nockchain..." && \
+	RUST_BACKTRACE=full \
+	RUST_LOG=debug,nockchain=trace,nockchain_libp2p_io=debug,libp2p=debug \
+	../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--mining-pubkey $(MINING_PUBKEY) \
 		--mine \
@@ -261,9 +279,15 @@ run-nockchain: build ## Run nockchain node with optimized kernel pool
 run-nockchain-no-mining: build ## Run nockchain node without mining (observer mode)
 	$(call show_env_vars)
 	@echo "Running nockchain node in observer mode..."
+	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
+	@echo "Debug: Binary path = ../$(TARGET_DIR)/nockchain"
 	mkdir -p observer-node
-	cd observer-node && rm -f nockchain.sock && \
-	RUST_BACKTRACE=1 ../$(TARGET_DIR)/nockchain \
+	cd observer-node && \
+	echo "Debug: Inside observer-node, pwd = $$(pwd)" && \
+	rm -f nockchain.sock && \
+	RUST_BACKTRACE=full \
+	RUST_LOG=debug,nockchain=trace,nockchain_libp2p_io=debug \
+	../$(TARGET_DIR)/nockchain \
 		--npc-socket nockchain.sock \
 		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
 		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
@@ -334,3 +358,40 @@ endef
 
 # Make sure we don't run into issues with file names as targets
 .PHONY: $(HOON_TARGETS)
+
+.PHONY: debug-run
+debug-run: build ## Debug run with maximum verbosity and kernel pool stats
+	$(call show_env_vars)
+	@echo "🔍 DEBUG MODE: Maximum verbosity enabled"
+	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
+	@echo "Debug: Binary exists: $$(ls -la $(TARGET_DIR)/nockchain | wc -l) files"
+	@echo "Debug: Binary size: $$(ls -lh $(TARGET_DIR)/nockchain | awk '{print $$5}')"
+	@echo "Debug: Mining pubkey: $(MINING_PUBKEY)"
+	mkdir -p debug-node
+	cd debug-node && \
+	echo "🚀 Starting nockchain in DEBUG mode..." && \
+	rm -f nockchain.sock && \
+	RUST_BACKTRACE=full \
+	RUST_LOG=trace \
+	MINIMAL_LOG_FORMAT=false \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket nockchain.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1
+
+.PHONY: test-kernel-pool
+test-kernel-pool: build ## Test kernel pool functionality specifically
+	@echo "🧪 Testing kernel pool optimization..."
+	@echo "Debug: This will test if our kernel pool is working correctly"
+	mkdir -p test-mining
+	cd test-mining && \
+	echo "Testing kernel pool..." && \
+	RUST_BACKTRACE=full \
+	RUST_LOG=debug,nockchain::kernel_pool=trace,nockchain::mining=trace \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket test.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1
