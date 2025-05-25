@@ -1,4 +1,5 @@
 use std::vec;
+use rayon::prelude::*;
 
 use crate::form::math::{bpow, FieldError};
 use crate::form::poly::*;
@@ -427,4 +428,182 @@ pub fn normalize_bpoly(a: &mut Vec<Belt>) {
             break;
         }
     }
+}
+
+/// Parallel polynomial multiplication for large polynomials
+#[inline(always)]
+pub fn bpmul_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
+    if a.is_zero() || b.is_zero() {
+        res.fill(Belt(0));
+        return;
+    }
+
+    res.fill(Belt(0));
+
+    let a_len = a.len();
+    let b_len = b.len();
+
+    // Use parallel computation for large polynomials
+    if a_len * b_len > 10000 {
+        // Parallel multiplication with atomic updates
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let atomic_res: Vec<AtomicU64> = (0..res.len())
+            .map(|_| AtomicU64::new(0))
+            .collect();
+
+        (0..a_len).into_par_iter().for_each(|i| {
+            if a[i] == 0 {
+                return;
+            }
+            for j in 0..b_len {
+                let product = (a[i] * b[j]).0;
+                atomic_res[i + j].fetch_add(product, Ordering::Relaxed);
+            }
+        });
+
+        // Copy results back
+        for (i, atomic_val) in atomic_res.iter().enumerate() {
+            res[i] = Belt(atomic_val.load(Ordering::Relaxed));
+        }
+    } else {
+        // Use sequential for smaller polynomials
+        bpmul(a, b, res);
+    }
+}
+
+/// Parallel Hadamard product
+#[inline(always)]
+pub fn bp_hadamard_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
+    assert_eq!(a.len(), b.len(), "Unequal lengths: {}, {}", a.len(), b.len());
+
+    if a.len() > 1000 {
+        // Use parallel computation for large arrays
+        res.par_iter_mut()
+            .zip(a.par_iter())
+            .zip(b.par_iter())
+            .for_each(|((res_i, a_i), b_i)| {
+                *res_i = *a_i * *b_i;
+            });
+    } else {
+        // Use sequential for smaller arrays
+        bp_hadamard(a, b, res);
+    }
+}
+
+/// Parallel scalar multiplication
+#[inline(always)]
+pub fn bpscal_parallel(scalar: Belt, b: &[Belt], res: &mut [Belt]) {
+    if b.len() > 1000 {
+        res.par_iter_mut()
+            .zip(b.par_iter())
+            .for_each(|(res, bp)| {
+                *res = scalar * *bp;
+            });
+    } else {
+        bpscal(scalar, b, res);
+    }
+}
+
+/// Parallel polynomial addition
+#[inline(always)]
+pub fn bpadd_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
+    let min: &[Belt];
+    let max: &[Belt];
+    if a.len() <= b.len() {
+        min = a;
+        max = b;
+    } else {
+        min = b;
+        max = a;
+    }
+
+    if res.len() > 1000 {
+        res.par_iter_mut()
+            .zip(max.par_iter())
+            .zip(min.par_iter().map(Some).chain(std::iter::repeat(None)))
+            .for_each(|((res_vec, max_vec), min_vec)| {
+                if let Some(min_vec) = min_vec {
+                    *res_vec = *min_vec + *max_vec;
+                } else {
+                    *res_vec = *max_vec;
+                }
+            });
+    } else {
+        bpadd(a, b, res);
+    }
+}
+
+/// Parallel Number Theoretic Transform
+pub fn bp_ntt_parallel(bp: &[Belt], root: &Belt) -> Vec<Belt> {
+    let n = bp.len() as u32;
+
+    if n == 1 {
+        return vec![bp[0]];
+    }
+
+    debug_assert!(n.is_power_of_two());
+
+    let log_2_of_n = n.ilog2();
+
+    let mut x: Vec<Belt> = vec![Belt(0); n as usize];
+    x.copy_from_slice(bp);
+
+    // Parallel bit-reversal for large arrays
+    if n > 1024 {
+        let indices: Vec<(usize, usize)> = (0..n)
+            .filter_map(|k| {
+                let rk = bitreverse(k, log_2_of_n);
+                if k < rk { Some((k as usize, rk as usize)) } else { None }
+            })
+            .collect();
+
+        // Sequential swaps (can't parallelize swaps easily)
+        for (k, rk) in indices {
+            x.swap(k, rk);
+        }
+    } else {
+        for k in 0..n {
+            let rk = bitreverse(k, log_2_of_n);
+            if k < rk {
+                x.swap(rk as usize, k as usize);
+            }
+        }
+    }
+
+    // Main NTT computation
+    let mut m = 1;
+    for _ in 0..log_2_of_n {
+        let w_m: Belt = bpow(root.0, (n / (2 * m)) as u64).into();
+
+        if n >= 1024 && m >= 64 {
+            // Parallel computation for large transforms
+            (0..n).into_par_iter().step_by((2 * m) as usize).for_each(|k| {
+                let mut w = Belt(1);
+                for j in 0..m {
+                    let u: Belt = x[(k + j) as usize];
+                    let v: Belt = x[(k + j + m) as usize] * w;
+                    x[(k + j) as usize] = u + v;
+                    x[(k + j + m) as usize] = u - v;
+                    w = w * w_m;
+                }
+            });
+        } else {
+            // Sequential for smaller stages
+            let mut k = 0;
+            while k < n {
+                let mut w = Belt(1);
+                for j in 0..m {
+                    let u: Belt = x[(k + j) as usize];
+                    let v: Belt = x[(k + j + m) as usize] * w;
+                    x[(k + j) as usize] = u + v;
+                    x[(k + j + m) as usize] = u - v;
+                    w = w * w_m;
+                }
+                k += 2 * m;
+            }
+        }
+
+        m *= 2;
+    }
+    x
 }

@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use kernels::miner::KERNEL;
 use nockapp::kernel::checkpoint::JamPaths;
@@ -13,11 +14,32 @@ use nockvm::noun::{Atom, D, T};
 use nockvm_macros::tas;
 use tempfile::tempdir;
 use tracing::{instrument, warn, info, debug, error};
+use tokio::sync::{mpsc, Semaphore};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::kernel_pool::{KernelPool, KernelPoolConfig};
 
 // Global kernel pool instance
 static KERNEL_POOL: tokio::sync::OnceCell<Arc<KernelPool>> = tokio::sync::OnceCell::const_new();
+
+// Global mining statistics
+static MINING_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static SUCCESSFUL_MINES: AtomicU64 = AtomicU64::new(0);
+
+/// Mining work item
+#[derive(Debug)]
+struct MiningWork {
+    candidate: NounSlab,
+    work_id: u64,
+}
+
+/// Mining result
+#[derive(Debug)]
+struct MiningResult {
+    work_id: u64,
+    effects: Option<NounSlab>,
+    duration: Duration,
+}
 
 pub enum MiningWire {
     Mined,
@@ -170,53 +192,220 @@ pub fn create_mining_driver(
                 return Ok(());
             }
 
-            let mut next_attempt: Option<NounSlab> = None;
-            let mut current_attempt: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+            // 🚀 NEW: Parallel mining with all available cores
+            start_parallel_mining(handle).await
+        })
+    })
+}
 
-            loop {
-                tokio::select! {
-                    effect_res = handle.next_effect() => {
-                        let Ok(effect) = effect_res else {
-                          warn!("Error receiving effect in mining driver: {effect_res:?}");
-                        continue;
-                        };
-                        let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
-                            drop(effect);
-                            continue;
-                        };
+/// Start parallel mining using all available kernels
+async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppError> {
+    info!("🚀 Starting PARALLEL mining with all available cores!");
 
-                        if effect_cell.head().eq_bytes("mine") {
-                            let candidate_slab = {
-                                let mut slab = NounSlab::new();
-                                slab.copy_into(effect_cell.tail());
-                                slab
-                            };
-                            if !current_attempt.is_empty() {
-                                next_attempt = Some(candidate_slab);
-                            } else {
-                                let (cur_handle, attempt_handle) = handle.dup();
-                                handle = cur_handle;
-                                current_attempt.spawn(mining_attempt_optimized(candidate_slab, attempt_handle));
-                            }
-                        }
-                    },
-                    mining_attempt_res = current_attempt.join_next(), if !current_attempt.is_empty()  => {
-                        if let Some(Err(e)) = mining_attempt_res {
-                            warn!("Error during mining attempt: {e:?}");
-                        }
-                        let Some(candidate_slab) = next_attempt else {
-                            continue;
-                        };
-                        next_attempt = None;
-                        let (cur_handle, attempt_handle) = handle.dup();
-                        handle = cur_handle;
-                        current_attempt.spawn(mining_attempt_optimized(candidate_slab, attempt_handle));
+    // Get system capabilities
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    let pool = get_kernel_pool().await.map_err(|_| NockAppError::OtherError)?;
+    let max_concurrent = ((num_cpus * 3) / 4).max(8); // Same as kernel pool max
 
+    info!("📊 Parallel mining config: {} concurrent workers on {}-core system",
+          max_concurrent, num_cpus);
+
+    // Create channels for work distribution
+    let (work_tx, work_rx) = mpsc::unbounded_channel::<MiningWork>();
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<MiningResult>();
+
+    // Spawn parallel mining workers
+    let worker_pool = Arc::new(Semaphore::new(max_concurrent));
+    let work_rx = Arc::new(tokio::sync::Mutex::new(work_rx));
+
+    // Start worker tasks
+    for worker_id in 0..max_concurrent {
+        let pool_clone = pool.clone();
+        let work_rx_clone = work_rx.clone();
+        let result_tx_clone = result_tx.clone();
+        let worker_pool_clone = worker_pool.clone();
+
+        tokio::spawn(async move {
+            mining_worker(worker_id, pool_clone, work_rx_clone, result_tx_clone, worker_pool_clone).await;
+        });
+    }
+
+    info!("✅ Spawned {} parallel mining workers", max_concurrent);
+
+    let mut work_counter = 0u64;
+
+    loop {
+        tokio::select! {
+            // Handle incoming mining candidates
+            effect_res = handle.next_effect() => {
+                let Ok(effect) = effect_res else {
+                    warn!("Error receiving effect in mining driver: {effect_res:?}");
+                    continue;
+                };
+                let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                    drop(effect);
+                    continue;
+                };
+
+                if effect_cell.head().eq_bytes("mine") {
+                    let candidate_slab = {
+                        let mut slab = NounSlab::new();
+                        slab.copy_into(effect_cell.tail());
+                        slab
+                    };
+
+                    work_counter += 1;
+                    let work = MiningWork {
+                        candidate: candidate_slab,
+                        work_id: work_counter,
+                    };
+
+                    // Distribute work to all available workers
+                    if let Err(_) = work_tx.send(work) {
+                        error!("Failed to send work to mining workers");
+                    } else {
+                        debug!("🔄 Dispatched mining work #{} to parallel workers", work_counter);
                     }
                 }
             }
-        })
-    })
+
+            // Handle mining results
+            result = result_rx.recv() => {
+                if let Some(result) = result {
+                    if let Some(effects) = result.effects {
+                        debug!("✅ Mining work #{} completed in {:?}", result.work_id, result.duration);
+
+                        // Process successful mining results
+                        for effect in effects.to_vec() {
+                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                                drop(effect);
+                                continue;
+                            };
+                            if effect_cell.head().eq_bytes("command") {
+                                if let Err(e) = handle.poke(MiningWire::Mined.to_wire(), effect).await {
+                                    error!("Could not poke nockchain with mined PoW: {}", e);
+                                } else {
+                                    SUCCESSFUL_MINES.fetch_add(1, Ordering::Relaxed);
+                                    info!("🎉 SUCCESSFUL MINE from worker! Total mines: {}",
+                                          SUCCESSFUL_MINES.load(Ordering::Relaxed));
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("❌ Mining work #{} found no solution in {:?}", result.work_id, result.duration);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Individual mining worker that processes work items
+async fn mining_worker(
+    worker_id: usize,
+    pool: Arc<KernelPool>,
+    work_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<MiningWork>>>,
+    result_tx: mpsc::UnboundedSender<MiningResult>,
+    worker_pool: Arc<Semaphore>,
+) {
+    info!("🔧 Mining worker #{} started", worker_id);
+
+    loop {
+        // Get next work item
+        let work = {
+            let mut rx = work_rx.lock().await;
+            rx.recv().await
+        };
+
+        let Some(work) = work else {
+            warn!("🔧 Mining worker #{} shutting down - no more work", worker_id);
+            break;
+        };
+
+        // Acquire semaphore permit to limit concurrency
+        let _permit = worker_pool.acquire().await.unwrap();
+
+        debug!("🔧 Worker #{} processing work #{}", worker_id, work.work_id);
+
+        // Process the mining work
+        let start_time = std::time::Instant::now();
+        MINING_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+
+        let effects = mining_attempt_worker(work.candidate, pool.clone()).await;
+
+        let duration = start_time.elapsed();
+        let result = MiningResult {
+            work_id: work.work_id,
+            effects,
+            duration,
+        };
+
+        if let Err(_) = result_tx.send(result) {
+            error!("🔧 Worker #{} failed to send result", worker_id);
+            break;
+        }
+
+        // Log statistics periodically
+        if MINING_ATTEMPTS.load(Ordering::Relaxed) % 50 == 0 {
+            let attempts = MINING_ATTEMPTS.load(Ordering::Relaxed);
+            let successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
+            let stats = pool.stats();
+            info!("⚡ Mining stats - Attempts: {}, Successes: {}, Active kernels: {}/{}",
+                  attempts, successes, stats.current_pool_size, stats.total_created);
+        }
+    }
+}
+
+/// Worker-optimized mining attempt (returns Option instead of void)
+#[instrument(skip_all)]
+async fn mining_attempt_worker(candidate: NounSlab, pool: Arc<KernelPool>) -> Option<NounSlab> {
+    let start_time = std::time::Instant::now();
+
+    // Get kernel from pool
+    let pooled_kernel = match pool.checkout().await {
+        Ok(kernel) => kernel,
+        Err(e) => {
+            error!("Failed to checkout kernel from pool: {}", e);
+            return None;
+        }
+    };
+
+    debug!("Kernel checked out in {:?}", start_time.elapsed());
+
+    // Execute mining with pooled kernel
+    let effects_slab = match pooled_kernel.kernel.poke(MiningWire::Candidate.to_wire(), candidate).await {
+        Ok(effects) => effects,
+        Err(e) => {
+            error!("Failed to poke mining kernel: {}", e);
+            pool.checkin(pooled_kernel);
+            return None;
+        }
+    };
+
+    debug!("Mining computation completed in {:?}", start_time.elapsed());
+
+    // Check if we found a solution
+    let has_solution = effects_slab.to_vec().iter().any(|effect| {
+        if let Ok(effect_cell) = unsafe { effect.root().as_cell() } {
+            effect_cell.head().eq_bytes("command")
+        } else {
+            false
+        }
+    });
+
+    // Return kernel to pool
+    pool.checkin(pooled_kernel);
+
+    let total_time = start_time.elapsed();
+    debug!("Worker mining attempt completed in {:?}, solution: {}", total_time, has_solution);
+
+    if has_solution {
+        Some(effects_slab)
+    } else {
+        None
+    }
 }
 
 /// Optimized mining attempt using kernel pool (10-50x faster)

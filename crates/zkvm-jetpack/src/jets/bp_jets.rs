@@ -2,6 +2,7 @@ use nockvm::interpreter::Context;
 use nockvm::jets::util::slot;
 use nockvm::jets::Result;
 use nockvm::noun::{Atom, IndirectAtom, Noun, D, T};
+use rayon::prelude::*;
 
 use crate::form::math::bpoly::*;
 use crate::form::poly::*;
@@ -49,7 +50,10 @@ pub fn bpadd_jet(context: &mut Context, subject: Noun) -> Result {
     let res_len = std::cmp::max(bp_poly.len(), bq_poly.len());
     let (res, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(res_len as usize));
-    bpadd(bp_poly.0, bq_poly.0, res_poly);
+
+    // Use parallel addition for better performance
+    use crate::form::math::bpoly::bpadd_parallel;
+    bpadd_parallel(bp_poly.0, bq_poly.0, res_poly);
 
     let res_cell = finalize_poly(&mut context.stack, Some(res_poly.len()), res);
 
@@ -102,7 +106,10 @@ pub fn bpscal_jet(context: &mut Context, subject: Noun) -> Result {
 
     let (res, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(bp_poly.len()));
-    bpscal(Belt(c_64), bp_poly.0, res_poly);
+
+    // Use parallel scalar multiplication for better performance
+    use crate::form::math::bpoly::bpscal_parallel;
+    bpscal_parallel(Belt(c_64), bp_poly.0, res_poly);
 
     let res_cell = finalize_poly(&mut context.stack, Some(res_poly.len()), res);
 
@@ -127,7 +134,10 @@ pub fn bpmul_jet(context: &mut Context, subject: Noun) -> Result {
     let (res_atom, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(res_len));
 
-    bpmul(bp_poly.0, bq_poly.0, res_poly);
+    // Use parallel multiplication for better performance
+    use crate::form::math::bpoly::bpmul_parallel;
+    bpmul_parallel(bp_poly.0, bq_poly.0, res_poly);
+
     let res_cell = finalize_poly(&mut context.stack, Some(res_len), res_atom);
 
     Ok(res_cell)
@@ -145,7 +155,10 @@ pub fn bp_hadamard_jet(context: &mut Context, subject: Noun) -> Result {
     let res_len = bp_poly.len();
     let (res, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(res_len));
-    bp_hadamard(bp_poly.0, bq_poly.0, res_poly);
+
+    // Use parallel Hadamard product for better performance
+    use crate::form::math::bpoly::bp_hadamard_parallel;
+    bp_hadamard_parallel(bp_poly.0, bq_poly.0, res_poly);
 
     let res_cell = finalize_poly(&mut context.stack, Some(res_poly.len()), res);
 
@@ -161,8 +174,11 @@ pub fn bp_ntt_jet(context: &mut Context, subject: Noun) -> Result {
         return jet_err();
     };
     let root_64 = root_atom.as_u64()?;
-    let returned_bpoly = bp_ntt(bp_poly.0, &Belt(root_64));
-    // TODO: preallocate and pass res buffer into bp_ntt?
+
+    // Use parallel NTT for better performance
+    use crate::form::math::bpoly::bp_ntt_parallel;
+    let returned_bpoly = bp_ntt_parallel(bp_poly.0, &Belt(root_64));
+
     let (res_atom, res_poly): (IndirectAtom, &mut [Belt]) =
         new_handle_mut_slice(&mut context.stack, Some(returned_bpoly.len() as usize));
     res_poly.copy_from_slice(&returned_bpoly[..]);
