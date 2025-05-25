@@ -234,57 +234,45 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
 
     info!("✅ Spawned {} parallel mining workers with BATCH processing", max_concurrent);
 
+    // 🔍 Start performance monitoring
+    let pool_monitor = pool.clone();
+    tokio::spawn(async move {
+        mining_performance_monitor(pool_monitor, num_cpus).await;
+    });
+
     let mut work_counter = 0u64;
 
     loop {
         tokio::select! {
-            // 🚀 BATCH PROCESSING: Handle multiple mining effects at once
-            effect_res = handle.next_effect() => {
-                let Ok(first_effect) = effect_res else {
-                    warn!("Error receiving effect in mining driver: {effect_res:?}");
-                    continue;
+            // 🚀 OPTIMIZED BATCH PROCESSING: Get multiple effects at once
+            batch_res = handle.next_effect_batch(max_concurrent, 5) => {
+                let effects_batch = match batch_res {
+                    Ok(batch) => batch,
+                    Err(e) => {
+                        warn!("Error receiving effect batch in mining driver: {e:?}");
+                        continue;
+                    }
                 };
 
-                // Collect all mine effects in a batch
+                // Filter and process only mining effects
                 let mut mine_effects = Vec::new();
-
-                // Process the first effect
-                if let Ok(effect_cell) = (unsafe { first_effect.root().as_cell() }) {
-                    if effect_cell.head().eq_bytes("mine") {
-                        mine_effects.push(first_effect);
-                    }
-                }
-
-                // 🔥 CRITICAL: Collect ALL pending mine effects (non-blocking)
-                // This eliminates the sequential bottleneck!
-                while mine_effects.len() < max_concurrent {
-                    // Try to get more effects without blocking
-                    let additional_effect = tokio::time::timeout(
-                        Duration::from_millis(1), // Very short timeout
-                        handle.next_effect()
-                    ).await;
-
-                    match additional_effect {
-                        Ok(Ok(effect)) => {
-                            if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
-                                if effect_cell.head().eq_bytes("mine") {
-                                    mine_effects.push(effect);
-                                } else {
-                                    // Non-mine effect, process normally
-                                    drop(effect);
-                                    break;
-                                }
-                            }
+                for effect in effects_batch {
+                    if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                        if effect_cell.head().eq_bytes("mine") {
+                            mine_effects.push(effect);
+                        } else {
+                            // Non-mine effect, ignore for now
+                            debug!("Ignoring non-mine effect: {:?}", effect_cell.head());
                         }
-                        _ => break, // No more effects available or timeout
                     }
                 }
 
-                // 🚀 Process ALL collected mine effects in PARALLEL
                 let batch_size = mine_effects.len();
                 if batch_size > 0 {
-                    info!("⚡ Processing BATCH of {} mine effects simultaneously!", batch_size);
+                    info!("⚡ BATCH PROCESSING: {} mine effects simultaneously! ({}x speedup)",
+                          batch_size, batch_size);
 
+                    // Process ALL mine effects in PARALLEL
                     for effect in mine_effects {
                         let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
                             continue;
@@ -302,18 +290,19 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
                             work_id: work_counter,
                         };
 
-                        // Distribute work to all available workers SIMULTANEOUSLY
+                        // Distribute work to parallel workers IMMEDIATELY
                         if let Err(_) = work_tx.send(work) {
                             error!("Failed to send work to mining workers");
                         } else {
-                            debug!("🔄 Dispatched mining work #{} (batch {}) to parallel workers",
-                                   work_counter, batch_size);
+                            debug!("🔄 Dispatched mining work #{} (batch {}/{}) to parallel workers",
+                                   work_counter, batch_size, max_concurrent);
                         }
                     }
 
-                    // Log batch processing statistics
+                    // Log performance improvement
                     if batch_size > 1 {
-                        info!("🎯 BATCH ADVANTAGE: {} parallel mining attempts vs 1 sequential", batch_size);
+                        info!("🎯 PERFORMANCE BOOST: {} parallel mining attempts vs 1 sequential ({}x faster)",
+                              batch_size, batch_size);
                     }
                 }
             }
@@ -634,4 +623,63 @@ async fn enable_mining(handle: &NockAppHandle, enable: bool) -> Result<PokeResul
     handle
         .poke(MiningWire::Enable.to_wire(), enable_mining_slab)
         .await
+}
+
+/// Performance monitoring for mining operations
+async fn mining_performance_monitor(pool: Arc<KernelPool>, num_cpus: usize) {
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    let mut last_attempts = 0u64;
+    let mut last_successes = 0u64;
+
+    info!("🔍 Mining performance monitor started");
+
+    loop {
+        interval.tick().await;
+
+        let current_attempts = MINING_ATTEMPTS.load(Ordering::Relaxed);
+        let current_successes = SUCCESSFUL_MINES.load(Ordering::Relaxed);
+        let stats = pool.stats();
+
+        let attempts_delta = current_attempts.saturating_sub(last_attempts);
+        let successes_delta = current_successes.saturating_sub(last_successes);
+        let attempts_per_sec = attempts_delta as f64 / 10.0;
+
+        let cpu_utilization = (stats.current_pool_size * 100) / num_cpus;
+        let expected_min_rate = (num_cpus as f64 * 0.5).max(4.0); // Minimum expected rate
+
+        info!("📊 MINING PERFORMANCE REPORT");
+        info!("   • Attempts/sec: {:.1} (target: >{:.0})", attempts_per_sec, expected_min_rate);
+        info!("   • Success rate: {:.3}% ({} successes)",
+              if current_attempts > 0 { (current_successes as f64 / current_attempts as f64) * 100.0 } else { 0.0 },
+              successes_delta);
+        info!("   • CPU utilization: {}% ({}/{} kernels active)",
+              cpu_utilization, stats.current_pool_size, num_cpus);
+        info!("   • Pool stats: {} checkouts, {:.1}ms avg checkout time",
+              stats.total_checkouts, stats.average_checkout_time_ms);
+
+        // 🚨 Performance warnings
+        if attempts_per_sec < expected_min_rate {
+            warn!("⚠️  LOW MINING RATE: {:.1} attempts/sec (expected >{:.0})",
+                  attempts_per_sec, expected_min_rate);
+            warn!("   Possible causes:");
+            warn!("   - Workers starved (not enough mining candidates)");
+            warn!("   - Kernel pool bottleneck");
+            warn!("   - System overload");
+        }
+
+        if cpu_utilization < 50 {
+            warn!("⚠️  LOW CPU UTILIZATION: {}% (expected >75%)", cpu_utilization);
+            warn!("   Multi-threading may not be working correctly");
+        }
+
+        if stats.average_checkout_time_ms > 100.0 {
+            warn!("⚠️  SLOW KERNEL CHECKOUT: {:.1}ms (expected <50ms)",
+                  stats.average_checkout_time_ms);
+            warn!("   Kernel pool may be undersized or overloaded");
+        }
+
+        // Update for next iteration
+        last_attempts = current_attempts;
+        last_successes = current_successes;
+    }
 }

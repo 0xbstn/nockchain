@@ -166,6 +166,62 @@ impl NockAppHandle {
         Ok(effect_receiver.recv().await?)
     }
 
+    /// Collect multiple effects in a batch for parallel processing
+    /// This is critical for mining performance - eliminates sequential bottleneck
+    #[instrument(skip(self))]
+    pub async fn next_effect_batch(&self, max_batch_size: usize, timeout_ms: u64) -> Result<Vec<NounSlab>, NockAppError> {
+        let mut effect_receiver = self.effect_receiver.lock().await;
+        let mut effects = Vec::new();
+
+        // Get the first effect (blocking)
+        tracing::debug!("Waiting for first effect in batch");
+        let first_effect = effect_receiver.recv().await?;
+        effects.push(first_effect);
+
+        // Collect additional effects with timeout (non-blocking)
+        while effects.len() < max_batch_size {
+            let timeout_duration = std::time::Duration::from_millis(timeout_ms);
+
+            match tokio::time::timeout(timeout_duration, effect_receiver.recv()).await {
+                Ok(Ok(effect)) => {
+                    effects.push(effect);
+                    tracing::debug!("Added effect to batch, total: {}", effects.len());
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Effect receiver error in batch: {:?}", e);
+                    break;
+                }
+                Err(_) => {
+                    // Timeout - no more effects available
+                    tracing::debug!("Batch timeout reached with {} effects", effects.len());
+                    break;
+                }
+            }
+        }
+
+        tracing::debug!("Collected batch of {} effects", effects.len());
+        Ok(effects)
+    }
+
+    /// Try to get a single effect without blocking
+    #[instrument(skip(self))]
+    pub fn try_next_effect(&self) -> Result<Option<NounSlab>, NockAppError> {
+        // This requires a non-blocking try_recv, which broadcast::Receiver doesn't have
+        // We'll implement this using a timeout of 0
+        let effect_receiver = self.effect_receiver.try_lock()
+            .map_err(|_| NockAppError::OtherError)?;
+
+        match effect_receiver.try_recv() {
+            Ok(effect) => Ok(Some(effect)),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => Ok(None),
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => Err(NockAppError::ChannelClosedError),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                tracing::warn!("Effect receiver lagged, some effects may have been missed");
+                Ok(None)
+            }
+        }
+    }
+
     #[instrument(skip(self))]
     pub fn dup(self) -> (Self, Self) {
         let io_sender = self.io_sender.clone();
