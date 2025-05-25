@@ -564,7 +564,7 @@ async fn mining_attempt_worker(candidate: NounSlab, pool: Arc<KernelPool>) -> Op
     let start_time = std::time::Instant::now();
 
     // Get kernel from pool
-    let pooled_kernel = match pool.checkout().await {
+    let mut pooled_kernel = match pool.checkout().await {
         Ok(kernel) => kernel,
         Err(e) => {
             error!("Failed to checkout kernel from pool: {}", e);
@@ -574,38 +574,59 @@ async fn mining_attempt_worker(candidate: NounSlab, pool: Arc<KernelPool>) -> Op
 
     debug!("Kernel checked out in {:?}", start_time.elapsed());
 
-    // Execute mining with pooled kernel
-    let effects_slab = match pooled_kernel.kernel.poke(MiningWire::Candidate.to_wire(), candidate).await {
-        Ok(effects) => effects,
-        Err(e) => {
-            error!("Failed to poke mining kernel: {}", e);
-            pool.checkin(pooled_kernel);
-            return None;
-        }
-    };
-
-    debug!("Mining computation completed in {:?}", start_time.elapsed());
-
-    // Check if we found a solution
-    let has_solution = effects_slab.to_vec().iter().any(|effect| {
-        if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
-            effect_cell.head().eq_bytes("command")
+    // 🔥 KEY OPTIMIZATION: Do MULTIPLE mining attempts with the same kernel
+    // This keeps the kernel busy longer and reduces checkout/checkin overhead
+    let mut final_result = None;
+    let attempts_per_checkout = 100; // Do 100 attempts to keep kernel busy longer
+    
+    for attempt in 0..attempts_per_checkout {
+        // Create a variation for each attempt
+        let attempt_candidate = if attempt == 0 {
+            candidate.clone()
         } else {
-            false
+            // Create slight variation to try different nonces
+            let mut varied = NounSlab::new();
+            varied.copy_into(unsafe { *candidate.root() });
+            let variation_atom = Atom::new(&mut varied, attempt as u64).as_noun();
+            let base = unsafe { *varied.root() };
+            let new_root = T(&mut varied, &[base, variation_atom]);
+            varied.set_root(new_root);
+            varied
+        };
+
+        // Execute mining with pooled kernel
+        let effects_slab = match pooled_kernel.kernel.poke(MiningWire::Candidate.to_wire(), attempt_candidate).await {
+            Ok(effects) => effects,
+            Err(e) => {
+                error!("Failed to poke mining kernel on attempt {}: {}", attempt, e);
+                continue; // Try next variation
+            }
+        };
+
+        // Check if we found a solution
+        let has_solution = effects_slab.to_vec().iter().any(|effect| {
+            if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                effect_cell.head().eq_bytes("command")
+            } else {
+                false
+            }
+        });
+
+        if has_solution {
+            final_result = Some(effects_slab);
+            break; // Found solution, stop trying
         }
-    });
+    }
+
+    debug!("Mining batch completed in {:?} with {} attempts", start_time.elapsed(), attempts_per_checkout);
 
     // Return kernel to pool
     pool.checkin(pooled_kernel);
 
     let total_time = start_time.elapsed();
-    debug!("Worker mining attempt completed in {:?}, solution: {}", total_time, has_solution);
+    debug!("Worker mining batch completed in {:?}, solution found: {}", total_time, final_result.is_some());
 
-    if has_solution {
-        Some(effects_slab)
-    } else {
-        None
-    }
+    final_result
 }
 
 /// Optimized mining attempt using kernel pool (10-50x faster)
