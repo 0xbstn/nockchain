@@ -108,13 +108,13 @@ async fn init_kernel_pool() -> Result<Arc<KernelPool>, Box<dyn std::error::Error
         .unwrap_or(8);
 
     // Scale kernel pool based on available CPUs
-    // Use 50-75% of available threads for mining kernels
-    let min_kernels = (num_cpus / 2).max(4);  // At least 4, but scale with CPUs
-    let max_kernels = ((num_cpus * 3) / 4).max(8);  // Up to 75% of threads
+    // Use ALL available threads for maximum performance
+    let min_kernels = num_cpus.max(4);  // Use all CPUs, minimum 4
+    let max_kernels = num_cpus.max(8);  // Use ALL threads for mining
 
     let config = KernelPoolConfig {
         min_size: min_kernels,     // Dynamic based on CPU count
-        max_size: max_kernels,     // Scale up to 75% of available threads
+        max_size: max_kernels,     // Use ALL available threads
         max_kernel_age: std::time::Duration::from_secs(600), // 10 minutes
         max_kernel_usage: 50,  // Replace after 50 uses
         checkout_timeout: std::time::Duration::from_secs(30),
@@ -122,8 +122,8 @@ async fn init_kernel_pool() -> Result<Arc<KernelPool>, Box<dyn std::error::Error
     };
 
     info!("🚀 Initializing mining kernel pool for {}-thread system", num_cpus);
-    info!("📊 Kernel pool config: min={}, max={} (using {}% of CPU threads)",
-          min_kernels, max_kernels, (max_kernels * 100) / num_cpus);
+    info!("📊 Kernel pool config: min={}, max={} (using 100% of CPU threads)",
+          min_kernels, max_kernels);
 
     let pool = KernelPool::new(config).await?;
     info!("✅ Mining kernel pool initialized successfully");
@@ -261,7 +261,7 @@ async fn start_optimized_parallel_mining(mut handle: NockAppHandle) -> Result<()
 
                         // 🔥 KEY OPTIMIZATION: Generate multiple work items from one effect
                         // This simulates having multiple candidates to process
-                        let variations = max_concurrent.min(24); // Generate up to 24 variations
+                        let variations = max_concurrent; // Generate work for ALL threads
                         
                         for variation in 0..variations {
                             let varied_candidate = if variation == 0 {
