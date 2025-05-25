@@ -386,7 +386,13 @@ debug-run: build ## Debug run with enhanced verbosity
 		--mining-pubkey $(MINING_PUBKEY) \
 		--mine \
 		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
-		--peer /ip4/65.108.123.225/udp/3006/quic-v1
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
 
 .PHONY: test-kernel-pool
 test-kernel-pool: build ## Test kernel pool functionality specifically
@@ -401,7 +407,14 @@ test-kernel-pool: build ## Test kernel pool functionality specifically
 		--npc-socket test.sock \
 		--mining-pubkey $(MINING_PUBKEY) \
 		--mine \
-		--peer /ip4/95.216.102.60/udp/3006/quic-v1
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
 
 .PHONY: system-info
 system-info: ## Show system configuration and expected mining performance
@@ -423,3 +436,88 @@ system-info: ## Show system configuration and expected mining performance
 	@echo "   • $$(( $$(nproc) * 3 / 4 )) parallel mining kernels"
 	@echo "   • ~75% CPU utilization across all cores"
 	@echo "   • 10-50x faster mining than single-kernel"
+
+.PHONY: debug-mining-verbose
+debug-mining-verbose: build ## Maximum verbosity mining debug with thread analysis
+	$(call show_env_vars)
+	@echo "🔍 MAXIMUM VERBOSITY DEBUG - Thread Analysis"
+	@echo "======================================================"
+	@echo "System: $$(nproc) cores detected"
+	@echo "Expected kernel pool: $$(( $$(nproc) / 2 )) - $$(( $$(nproc) * 3 / 4 )) kernels"
+	@echo "TOKIO_WORKER_THREADS: $(TOKIO_WORKER_THREADS)"
+	@echo "RAYON_NUM_THREADS: $(RAYON_NUM_THREADS)"
+	@echo "======================================================"
+	mkdir -p debug-mining-verbose
+	cd debug-mining-verbose && \
+	echo "🚀 Starting MAXIMUM VERBOSITY mining debug..." && \
+	rm -f nockchain.sock && \
+	RUST_BACKTRACE=full \
+	RUST_LOG=trace,nockchain::mining=trace,nockchain::kernel_pool=trace,tokio=debug,rayon=debug \
+	MINIMAL_LOG_FORMAT=false \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket nockchain.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
+
+.PHONY: test-threading
+test-threading: build ## Test if multi-threading optimizations are working
+	@echo "🧪 TESTING MULTI-THREADING OPTIMIZATIONS"
+	@echo "=========================================="
+	@echo "System cores: $$(nproc)"
+	@echo "Environment variables:"
+	@echo "  TOKIO_WORKER_THREADS: $(TOKIO_WORKER_THREADS)"
+	@echo "  RAYON_NUM_THREADS: $(RAYON_NUM_THREADS)"
+	@echo "  CARGO_BUILD_JOBS: $(CARGO_BUILD_JOBS)"
+	@echo ""
+	@echo "🔬 Starting thread test - watch CPU usage with 'htop' in another terminal"
+	@echo "Expected: ~75% CPU usage across all cores"
+	@echo "Starting in 3 seconds..."
+	@sleep 3
+	mkdir -p test-threading
+	cd test-threading && \
+	rm -f test.sock && \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=info,nockchain::mining=debug,nockchain::kernel_pool=info \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket test.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
+
+.PHONY: kernel-pool-test
+kernel-pool-test: build ## Test kernel pool creation and utilization
+	@echo "🔧 KERNEL POOL DIAGNOSTIC TEST"
+	@echo "=============================="
+	mkdir -p kernel-pool-test
+	cd kernel-pool-test && \
+	echo "Testing kernel pool with verbose logging..." && \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=trace,nockchain::kernel_pool=trace,nockchain::mining=trace \
+	timeout 30s ../$(TARGET_DIR)/nockchain \
+		--npc-socket kernel-test.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1 \
+	|| echo "Test completed after 30 seconds"
