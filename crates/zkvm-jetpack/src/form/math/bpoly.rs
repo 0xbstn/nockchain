@@ -445,25 +445,33 @@ pub fn bpmul_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
 
     // Use parallel computation for large polynomials
     if a_len * b_len > 10000 {
-        // Parallel multiplication with atomic updates
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let atomic_res: Vec<AtomicU64> = (0..res.len())
-            .map(|_| AtomicU64::new(0))
+        // Create intermediate results for each thread
+        let chunk_size = (a_len + rayon::current_num_threads() - 1) / rayon::current_num_threads();
+        let partial_results: Vec<Vec<Belt>> = (0..a_len)
+            .step_by(chunk_size)
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|start| {
+                let end = std::cmp::min(start + chunk_size, a_len);
+                let mut partial = vec![Belt(0); res.len()];
+
+                for i in start..end {
+                    if a[i] == 0 {
+                        continue;
+                    }
+                    for j in 0..b_len {
+                        partial[i + j] = partial[i + j] + a[i] * b[j];
+                    }
+                }
+                partial
+            })
             .collect();
 
-        (0..a_len).into_par_iter().for_each(|i| {
-            if a[i] == 0 {
-                return;
+        // Combine results
+        for partial in partial_results {
+            for (res_i, partial_i) in res.iter_mut().zip(partial.iter()) {
+                *res_i = *res_i + *partial_i;
             }
-            for j in 0..b_len {
-                let product = (a[i] * b[j]).0;
-                atomic_res[i + j].fetch_add(product, Ordering::Relaxed);
-            }
-        });
-
-        // Copy results back
-        for (i, atomic_val) in atomic_res.iter().enumerate() {
-            res[i] = Belt(atomic_val.load(Ordering::Relaxed));
         }
     } else {
         // Use sequential for smaller polynomials
@@ -518,16 +526,27 @@ pub fn bpadd_parallel(a: &[Belt], b: &[Belt], res: &mut [Belt]) {
     }
 
     if res.len() > 1000 {
-        res.par_iter_mut()
-            .zip(max.par_iter())
-            .zip(min.par_iter().map(Some).chain(std::iter::repeat(None)))
+        // Use parallel computation for large arrays
+        // Handle the parallel part more carefully
+        let min_len = min.len();
+        let max_len = max.len();
+
+        // Parallel computation for the overlapping part
+        res[0..min_len].par_iter_mut()
+            .zip(max[0..min_len].par_iter())
+            .zip(min.par_iter())
             .for_each(|((res_vec, max_vec), min_vec)| {
-                if let Some(min_vec) = min_vec {
-                    *res_vec = *min_vec + *max_vec;
-                } else {
-                    *res_vec = *max_vec;
-                }
+                *res_vec = *min_vec + *max_vec;
             });
+
+        // Sequential for the remaining part (if any)
+        if max_len > min_len {
+            res[min_len..max_len].par_iter_mut()
+                .zip(max[min_len..max_len].par_iter())
+                .for_each(|(res_vec, max_vec)| {
+                    *res_vec = *max_vec;
+                });
+        }
     } else {
         bpadd(a, b, res);
     }
