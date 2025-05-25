@@ -143,7 +143,7 @@ pub fn create_mining_driver(
     mine: bool,
     init_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> IODriverFn {
-    Box::new(move |mut handle| {
+    Box::new(move |handle| {
         Box::pin(async move {
             // Initialize kernel pool early if mining is enabled
             if mine {
@@ -260,7 +260,7 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
                         generation_counter += 1;
 
                         // Create a unique variation of the candidate
-                        let varied_candidate = create_candidate_variation(&candidate, variation_id);
+                        let varied_candidate = create_candidate_variation(&candidate, variation_id as u64);
 
                         let work = MiningWork {
                             candidate: varied_candidate,
@@ -296,7 +296,7 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
                 };
 
                 // Process mining effects to get new base candidates
-                if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                if let Ok(effect_cell) = unsafe { effect.root().as_cell() } {
                     if effect_cell.head().eq_bytes("mine") {
                         let candidate_slab = {
                             let mut slab = NounSlab::new();
@@ -334,7 +334,7 @@ async fn start_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppE
 
                         // Process successful mining results
                         for effect in effects.to_vec() {
-                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                            let Ok(effect_cell) = unsafe { effect.root().as_cell() } else {
                                 drop(effect);
                                 continue;
                             };
@@ -501,7 +501,7 @@ pub async fn mining_attempt_optimized(candidate: NounSlab, handle: NockAppHandle
 
     // Process effects
     for effect in effects_slab.to_vec() {
-        let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+        let Ok(effect_cell) = unsafe { effect.root().as_cell() } else {
             drop(effect);
             continue;
         };
@@ -555,7 +555,7 @@ pub async fn mining_attempt(candidate: NounSlab, handle: NockAppHandle) -> () {
         .await
         .expect("Could not poke mining kernel with candidate");
     for effect in effects_slab.to_vec() {
-        let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+        let Ok(effect_cell) = unsafe { effect.root().as_cell() } else {
             drop(effect);
             continue;
         };
@@ -649,13 +649,13 @@ fn create_candidate_variation(base_candidate: &NounSlab, variation_id: u64) -> N
     let mut varied_candidate = NounSlab::new();
 
     // Copy the base candidate structure
-    varied_candidate.copy_into(base_candidate.root());
+    varied_candidate.copy_into(*base_candidate.root());
 
     // 🔥 CRITICAL: Modify the candidate to create unique variations
     // We need to modify the nonce or add entropy to make each candidate unique
 
     // Extract the original candidate structure
-    let base_root = base_candidate.root();
+    let base_root = *base_candidate.root();
 
     // Create a modified version with variation_id as additional entropy
     // This simulates what would happen if we had different nonces
@@ -726,7 +726,7 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
                         let base_opt = base_candidate_clone.read().await.clone();
                         if let Some(base) = base_opt {
                             // Create variation with both generation_counter and batch_id for uniqueness
-                            create_candidate_variation(&base, generation_counter.wrapping_mul(1000).wrapping_add(batch_id))
+                            create_candidate_variation(&base, generation_counter.wrapping_mul(1000).wrapping_add(batch_id as u64))
                         } else {
                             // Create a more sophisticated dummy candidate for initial mining
                             let mut dummy_candidate = NounSlab::new();
@@ -734,7 +734,7 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
                             // Create a realistic mining candidate structure
                             // Format: [block_commitment nonce length] - similar to real mining data
                             let block_commitment = D(generation_counter);
-                            let nonce = D(batch_id);
+                            let nonce = D(batch_id as u64);
                             let length = D(32); // Use standard pow length
 
                             let dummy_data = T(&mut dummy_candidate, &[block_commitment, nonce, length]);
@@ -772,7 +772,7 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
                 };
 
                 // Process mining effects to get new base candidates
-                if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                if let Ok(effect_cell) = unsafe { effect.root().as_cell() } {
                     if effect_cell.head().eq_bytes("mine") {
                         let candidate_slab = {
                             let mut slab = NounSlab::new();
@@ -807,7 +807,7 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
 
                         // Process successful mining results
                         for effect in effects.to_vec() {
-                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                            let Ok(effect_cell) = unsafe { effect.root().as_cell() } else {
                                 drop(effect);
                                 continue;
                             };
@@ -884,7 +884,7 @@ async fn aggressive_mining_worker(
 
 /// 🚀 SOLUTION: True parallel mining with batch effect processing
 /// This solves the architectural bottleneck in handle.next_effect()
-async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), NockAppError> {
+async fn start_true_parallel_mining(handle: NockAppHandle) -> Result<(), NockAppError> {
     info!("🚀 Starting TRUE PARALLEL mining with BATCH EFFECT PROCESSING!");
     info!("🔧 ARCHITECTURAL FIX: Solving handle.next_effect() bottleneck");
     info!("📋 DIAGNOSIS: Previous issue was sequential effect consumption");
@@ -948,7 +948,7 @@ async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), Noc
                 // Process ALL effects in the batch
                 let mut mining_candidates = 0;
                 for effect in effects_batch {
-                    if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                    if let Ok(effect_cell) = unsafe { effect.root().as_cell() } {
                         if effect_cell.head().eq_bytes("mine") {
                             let candidate_slab = {
                                 let mut slab = NounSlab::new();
@@ -995,7 +995,7 @@ async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), Noc
 
                         // Process successful mining results
                         for effect in effects.to_vec() {
-                            let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) else {
+                            let Ok(effect_cell) = unsafe { effect.root().as_cell() } else {
                                 drop(effect);
                                 continue;
                             };
@@ -1027,7 +1027,7 @@ async fn start_true_parallel_mining(mut handle: NockAppHandle) -> Result<(), Noc
                           additional_effects.len());
 
                     for effect in additional_effects {
-                        if let Ok(effect_cell) = (unsafe { effect.root().as_cell() }) {
+                        if let Ok(effect_cell) = unsafe { effect.root().as_cell() } {
                             if effect_cell.head().eq_bytes("mine") {
                                 let candidate_slab = {
                                     let mut slab = NounSlab::new();
