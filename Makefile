@@ -467,6 +467,35 @@ debug-mining-verbose: build ## Maximum verbosity mining debug with thread analys
 		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
 		--peer /ip4/34.18.98.38/udp/30000/quic-v1
 
+.PHONY: debug-clean
+debug-clean: build ## Debug run with clean logs (debug level, no traces)
+	$(call show_env_vars)
+	@echo "🔍 DEBUG MODE: Clean debug logs (no traces)"
+	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
+	@echo "Debug: Binary size: $$(ls -lh $(TARGET_DIR)/nockchain | awk '{print $$5}')"
+	@echo "Debug: Mining pubkey: $(MINING_PUBKEY)"
+	@echo "Debug: System cores: $$(nproc)"
+	@echo "Debug: Expected kernel pool: $$(( $$(nproc) / 2 )) - $$(( $$(nproc) * 3 / 4 )) kernels"
+	mkdir -p debug-clean
+	cd debug-clean && \
+	echo "🚀 Starting nockchain with CLEAN DEBUG logs..." && \
+	rm -f nockchain.sock && \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug,nockchain::mining=debug,nockchain::kernel_pool=debug,nockchain_libp2p_io=info,libp2p=info \
+	MINIMAL_LOG_FORMAT=false \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket nockchain.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
+
 .PHONY: test-threading
 test-threading: build ## Test if multi-threading optimizations are working
 	@echo "🧪 TESTING MULTI-THREADING OPTIMIZATIONS"
@@ -521,3 +550,32 @@ kernel-pool-test: build ## Test kernel pool creation and utilization
 		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
 		--peer /ip4/34.18.98.38/udp/30000/quic-v1 \
 	|| echo "Test completed after 30 seconds"
+
+.PHONY: debug-clean
+debug-clean: build ## Debug run with clean logs (debug level, no traces)
+	$(call show_env_vars)
+	@echo "🔍 DEBUG MODE: Clean debug logs (no traces)"
+	@echo "Debug: TARGET_DIR = $(TARGET_DIR)"
+	@echo "Debug: Binary size: $$(ls -lh $(TARGET_DIR)/nockchain | awk '{print $$5}')"
+	@echo "Debug: Mining pubkey: $(MINING_PUBKEY)"
+	@echo "Debug: System cores: $$(nproc)"
+	@echo "Debug: Expected kernel pool: $$(( $$(nproc) / 2 )) - $$(( $$(nproc) * 3 / 4 )) kernels"
+	mkdir -p debug-clean
+	cd debug-clean && \
+	echo "🚀 Starting nockchain with CLEAN DEBUG logs..." && \
+	rm -f nockchain.sock && \
+	RUST_BACKTRACE=1 \
+	RUST_LOG=debug,nockchain::mining=debug,nockchain::kernel_pool=debug,nockchain_libp2p_io=info,libp2p=info \
+	MINIMAL_LOG_FORMAT=false \
+	../$(TARGET_DIR)/nockchain \
+		--npc-socket nockchain.sock \
+		--mining-pubkey $(MINING_PUBKEY) \
+		--mine \
+		--peer /ip4/95.216.102.60/udp/3006/quic-v1 \
+		--peer /ip4/65.108.123.225/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.108/udp/3006/quic-v1 \
+		--peer /ip4/65.21.67.175/udp/3006/quic-v1 \
+		--peer /ip4/65.109.156.172/udp/3006/quic-v1 \
+		--peer /ip4/34.174.22.166/udp/3006/quic-v1 \
+		--peer /ip4/34.95.155.151/udp/30000/quic-v1 \
+		--peer /ip4/34.18.98.38/udp/30000/quic-v1
