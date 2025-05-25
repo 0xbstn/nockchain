@@ -647,13 +647,23 @@ async fn enable_mining(handle: &NockAppHandle, enable: bool) -> Result<PokeResul
 fn create_candidate_variation(base_candidate: &NounSlab, variation_id: u64) -> NounSlab {
     let mut varied_candidate = NounSlab::new();
 
-    // Copy the base candidate
+    // Copy the base candidate structure
     varied_candidate.copy_into(base_candidate.root());
 
-    // TODO: Properly modify the candidate structure to add variation
-    // For now, we'll just copy it and let the mining kernel handle the variation
-    // In a real implementation, we'd want to modify the nonce or timestamp
-    // to ensure each worker gets a unique candidate to work on
+    // 🔥 CRITICAL: Modify the candidate to create unique variations
+    // We need to modify the nonce or add entropy to make each candidate unique
+
+    // Extract the original candidate structure
+    let base_root = base_candidate.root();
+
+    // Create a modified version with variation_id as additional entropy
+    // This simulates what would happen if we had different nonces
+    let entropy_atom = Atom::new(&mut varied_candidate, variation_id).as_noun();
+
+    // Create a new structure that includes the variation
+    // Format: [original_candidate variation_entropy]
+    let varied_root = T(&mut varied_candidate, &[base_root, entropy_atom]);
+    varied_candidate.set_root(varied_root);
 
     varied_candidate
 }
@@ -705,20 +715,28 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
 
             loop {
                 // Generate work continuously, even without a base candidate
-                let work_batch_size = max_concurrent * 4; // Generate 4x workers worth of work
+                let work_batch_size = max_concurrent * 8; // Generate 8x workers worth of work
 
-                for _ in 0..work_batch_size {
+                for batch_id in 0..work_batch_size {
                     generation_counter += 1;
 
-                    // Create a dummy candidate if we don't have a real one yet
+                    // Create a candidate with unique entropy
                     let candidate = {
                         let base_opt = base_candidate_clone.read().await.clone();
                         if let Some(base) = base_opt {
-                            create_candidate_variation(&base, generation_counter)
+                            // Create variation with both generation_counter and batch_id for uniqueness
+                            create_candidate_variation(&base, generation_counter.wrapping_mul(1000).wrapping_add(batch_id))
                         } else {
-                            // Create a minimal dummy candidate for initial mining
+                            // Create a more sophisticated dummy candidate for initial mining
                             let mut dummy_candidate = NounSlab::new();
-                            let dummy_data = T(&mut dummy_candidate, &[D(generation_counter), D(0)]);
+
+                            // Create a realistic mining candidate structure
+                            // Format: [block_commitment nonce length] - similar to real mining data
+                            let block_commitment = D(generation_counter);
+                            let nonce = D(batch_id);
+                            let length = D(32); // Use standard pow length
+
+                            let dummy_data = T(&mut dummy_candidate, &[block_commitment, nonce, length]);
                             dummy_candidate.set_root(dummy_data);
                             dummy_candidate
                         }
@@ -735,10 +753,10 @@ async fn start_aggressive_parallel_mining(mut handle: NockAppHandle) -> Result<(
                     }
                 }
 
-                debug!("⚡ Generated {} work items for aggressive parallel mining", work_batch_size);
+                debug!("⚡ Generated {} unique work items for aggressive parallel mining", work_batch_size);
 
                 // Generate work very frequently to keep all cores busy
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(5)).await; // Even more frequent
             }
         })
     };
